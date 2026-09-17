@@ -99,8 +99,8 @@ Enable it with:
 --loss_src_cons --lamb_src_cons 1.0
 ```
 
-A frozen source copy is created only when a Phase-2 consistency module is enabled.
-The ordinary Phase-1 path does not allocate the extra source model.
+A frozen source copy is created only when a Phase-2 source-anchored module is
+enabled. The ordinary Phase-1 path does not allocate the extra source model.
 
 ## Phase-2 module 2: prompt/text feature consistency
 
@@ -123,6 +123,34 @@ Enable it with:
 `cosine` and `l2` are supported. The option requires `--text_shift` so a
 meaningful adaptive prompt feature exists.
 
+## Phase-2 module 3: CMAC directional source anchoring
+
+DAF CMAC uses the frozen source visual feature to assign an anchor class to each
+patch. It then applies two directional hinge terms:
+
+1. penalize the adapted representation if similarity to its source-assigned
+   class decreases (`loss_away`);
+2. penalize the adapted representation if similarity to any source-unassigned
+   class increases (`loss_toward`).
+
+TMPA does not adapt its visual encoder, so the DAF feature-space implementation
+cannot be copied literally. The transferred version applies the same directional
+principle to TMPA's pixel-wise class probabilities:
+
+- the frozen source prediction assigns the anchor class per pixel;
+- adapted anchor probability is not allowed to decrease without penalty;
+- adapted non-anchor probabilities are not allowed to increase without penalty.
+
+This is deliberately different from symmetric source consistency: CMAC only
+penalizes harmful drift directions and does not penalize movement that strengthens
+the source-assigned class or suppresses alternatives.
+
+Enable it with:
+
+```bash
+--loss_cmac --lamb_cmac 1.0
+```
+
 ## Phase-2 ablation matrix
 
 Keep the same dataset, corruption order, severity, seed, learning rate and TTA
@@ -131,7 +159,10 @@ steps for every row:
 1. TMPA-Continual
 2. TMPA-Continual + Source Consistency
 3. TMPA-Continual + Prompt Feature Consistency
-4. TMPA-Continual + Source Consistency + Prompt Feature Consistency
+4. TMPA-Continual + CMAC
+5. TMPA-Continual + Source Consistency + Prompt Feature Consistency
+6. TMPA-Continual + Source Consistency + CMAC
+7. TMPA-Continual + all implemented stabilizers
 
 Example for source consistency:
 
@@ -151,12 +182,30 @@ CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
   --loss_src_cons --lamb_src_cons 1.0
 ```
 
+Example for CMAC:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
+  --test_sets loveda \
+  -a ViT-B/16 -b 1 --gpu 0 \
+  --lr 1e-4 --tta_steps 3 \
+  --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --text_shift --do_shift --per_label \
+  --text_adjust True \
+  --reset_mode continual \
+  --corruptions_list common \
+  --corruption_severity 5 \
+  --daf_root /path/to/DAF \
+  --loss_cmac --lamb_cmac 1.0
+```
+
 Result filenames include enabled module names and weights, so Phase-2 runs do
 not overwrite the Phase-1 baseline.
 
-## Next modules
+## Next module
 
-CMAC and SAFS should be integrated only after the two consistency modules are
-run independently. Their implementation should preserve the same Phase-1 stream
-and report an independent ablation before any combined configuration is treated
-as the full method.
+SAFS should be integrated after the three current stabilizers are evaluated
+independently. Its implementation should preserve the same Phase-1 stream and
+be treated as an update/sample-filtering mechanism rather than silently changing
+the corruption protocol.
