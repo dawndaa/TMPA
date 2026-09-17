@@ -239,6 +239,14 @@ def _stabilization_config(args):
                 'penalize moving away from the frozen-source assigned class or toward non-anchor classes'
             ),
         },
+        'diversity': {
+            'enabled': bool(args.loss_div),
+            'weight': args.lamb_div,
+            'definition': (
+                'DAF-style negative entropy of the marginal class distribution across pixels; '
+                'minimization discourages collapse to a small set of predicted classes'
+            ),
+        },
         'safs': {
             'enabled': bool(args.module_safs),
             'alpha': args.alpha_safs,
@@ -262,6 +270,8 @@ def _result_tag(args):
         parts.append(f'pfeat-{args.prompt_feat_cons_type}-{weight}')
     if args.loss_cmac:
         parts.append(f'cmac{args.lamb_cmac:g}'.replace('.', 'p'))
+    if args.loss_div:
+        parts.append(f'div{args.lamb_div:g}'.replace('.', 'p'))
     if args.module_safs:
         alpha = f'{args.alpha_safs:g}'.replace('.', 'p')
         parts.append(f'safs-a{alpha}-w{args.safs_window}-u{args.safs_warmup}')
