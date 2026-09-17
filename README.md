@@ -24,8 +24,11 @@
 # refer to https://github.com/likyoo/SimFeatUp
 
 # 2. git clone this repository
-git clone https://github.com/TiY68/TMPA.git
+git clone https://github.com/dawndaa/TMPA.git
 cd TMPA
+
+# use the CTTA + DAF integration branch
+git switch --track origin/feature/ctta-daf-integration
 
 # 3. create new anaconda env
 conda create -n TMPA python=3.8
@@ -55,6 +58,49 @@ bash TMPA.sh
 
 Results will be saved in `save_result/`.
 
+## Standalone CTTA + DAF integration
+
+The `feature/ctta-daf-integration` branch contains the CTTA protocol and DAF-derived stabilization modules used in this project.
+
+A separate DAF clone is **not required**. The relevant corruption implementation is vendored under:
+
+```text
+ctta/vendor/daf_imagecorruptions/
+```
+
+The evaluator supports:
+
+```text
+source / episodic / domain / continual
+Source Consistency
+Prompt Feature Consistency
+CMAC
+Temporal SAFS
+```
+
+Minimal CTTA smoke test:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
+  --test_sets loveda \
+  -a ViT-B/16 \
+  -b 1 \
+  --gpu 0 \
+  --lr 1e-4 \
+  --tta_steps 1 \
+  --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --text_shift --do_shift --per_label \
+  --text_adjust True \
+  --reset_mode continual \
+  --corruptions_list gaussian_noise \
+  --corruption_severity 5
+```
+
+Then replace `gaussian_noise` with `common` for the full 15-domain corruption stream.
+
+See `docs/standalone_ctta.md` and `docs/ctta_protocol.md` for the protocol, module flags and ablation setup.
+
 ## Results
 
 <p align="center">
@@ -79,4 +125,4 @@ Results will be saved in `save_result/`.
 
 ## Acknowledgement
 
-This implementation is based on [SegEarth-OV](https://github.com/likyoo/SegEarth-OV) and [TPS](https://github.com/elaine-sui/TPS). Thanks for the awesome work.
+This implementation is based on [SegEarth-OV](https://github.com/likyoo/SegEarth-OV) and [TPS](https://github.com/elaine-sui/TPS). The CTTA branch additionally vendors DAF-derived corruption code under its MIT licence. Thanks for the awesome work.
