@@ -6,10 +6,11 @@ This branch is self-contained with respect to the DAF integration. You do **not*
 
 - DAF/ImageNet-C corruption interface under `ctta/vendor/daf_imagecorruptions/`
 - common corruption formulas/severity tables used by the CTTA evaluator
+- the original DAF frost assets under `ctta/vendor/daf_imagecorruptions/frost/`
 - DAF-derived Source Consistency / Prompt Feature Consistency / CMAC / Temporal SAFS modules under `ctta/modules/`
 - DAF MIT licence under `ctta/vendor/DAF_LICENCE`
 
-The original DAF frost corruption uses bundled photographic frost textures. To keep this repository standalone without carrying those external binary assets, this branch uses a deterministic procedural frost texture while preserving DAF's severity blending coefficients. The other common corruption implementations use the vendored formulas and severity tables.
+The six frost texture files are copied from DAF unchanged and are committed in this repository. Their Git blob SHAs match the DAF source repository, so the CTTA branch no longer depends on an external DAF checkout for the frost corruption.
 
 ## Installation
 
