@@ -11,6 +11,7 @@ from ctta.modules.consistency import (
     prompt_feature_consistency,
     source_prediction_consistency,
 )
+from ctta.modules.diversity import diversity_loss
 from ctta.modules.safs import prediction_shift_score
 from run_utils import avg_entropy_seg, loss_prompt_entropy
 
@@ -21,6 +22,7 @@ def needs_source_model(args) -> bool:
         or args.loss_prompt_feat_cons
         or args.loss_cmac
         or args.module_safs
+        or args.loss_div
     )
 
 
@@ -87,7 +89,7 @@ def test_time_tuning_ctta(
     if optimizer is None:
         return []
     if needs_source_model(args) and source_model is None:
-        raise ValueError('A source-anchored module was requested but no frozen source model was provided.')
+        raise ValueError('A DAF-derived CTTA module was requested but no frozen source model was provided.')
     if args.module_safs and safs_gate is None:
         raise ValueError('SAFS was enabled but no temporal SAFS gate was provided.')
 
@@ -128,11 +130,16 @@ def test_time_tuning_ctta(
                     source_prob_maps,
                 )
 
+            div_loss = base_loss.new_zeros(())
+            if args.loss_div:
+                div_loss = diversity_loss(seg_prob_maps)
+
             total_loss = (
                 base_loss
                 + args.lamb_src_cons * src_cons_loss
                 + args.lamb_prompt_feat_cons * prompt_cons_loss
                 + args.lamb_cmac * cmac_loss
+                + args.lamb_div * div_loss
             )
 
         safs_info = {
@@ -164,6 +171,7 @@ def test_time_tuning_ctta(
             'source_consistency': float(src_cons_loss.detach().item()),
             'prompt_feature_consistency': float(prompt_cons_loss.detach().item()),
             'cmac': float(cmac_loss.detach().item()),
+            'diversity': float(div_loss.detach().item()),
             'safs_keep': float(did_update),
             'safs_shift': safs_info['score'],
             'safs_threshold': safs_info['threshold'],
