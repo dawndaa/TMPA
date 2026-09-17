@@ -24,6 +24,22 @@ The relevant DAF/ImageNet-C corruption implementation is vendored under:
 ctta/vendor/daf_imagecorruptions/
 ```
 
+The six original DAF frost texture files are vendored unchanged under:
+
+```text
+ctta/vendor/daf_imagecorruptions/frost/
+├── frost1.png
+├── frost2.png
+├── frost3.png
+├── frost4.jpg
+├── frost5.jpg
+└── frost6.jpg
+```
+
+Their Git blob SHAs match the source files in the DAF repository. Therefore the
+frost corruption uses the original DAF image assets rather than a procedural
+replacement.
+
 The legacy `--daf_root` argument may still be accepted by older commands for
 backward compatibility, but the CTTA corruption path no longer uses it.
 
@@ -32,16 +48,6 @@ DAF-derived source code is distributed with its MIT licence at:
 ```text
 ctta/vendor/DAF_LICENCE
 ```
-
-### Frost note
-
-The original DAF frost corruption blends the image with bundled photographic
-frost textures. This standalone branch uses a deterministic procedural icy
-texture instead of those external binary assets while preserving DAF's severity
-blend coefficients. Therefore the `frost` domain is protocol-compatible in
-name/severity/stream position but is **not pixel-identical** to DAF's original
-frost asset implementation. The remaining common corruptions use the vendored
-formulas and severity tables.
 
 ## 3. Corruption stream
 
