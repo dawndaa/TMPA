@@ -18,6 +18,7 @@ from tqdm import tqdm
 from args import parse_args
 from ctta.adaptation import (
     build_source_model,
+    needs_ctta_loop,
     needs_source_model,
     summarize_loss_reports,
     test_time_tuning_ctta,
@@ -78,7 +79,7 @@ def _validate_protocol(args):
         raise ValueError(f'Strict CTTA requires --batch_size 1, got {args.batch_size}.')
     if args.reset_mode != 'source' and args.tta_steps <= 0:
         raise ValueError('Non-source CTTA modes require --tta_steps > 0.')
-    if args.reset_mode == 'source' and needs_source_model(args):
+    if args.reset_mode == 'source' and needs_ctta_loop(args):
         raise ValueError('DAF-derived stabilization modules cannot be used with --reset_mode source.')
     if args.loss_prompt_feat_cons and not args.text_shift:
         raise ValueError('--loss_prompt_feat_cons requires --text_shift; otherwise the prompt feature is fixed.')
@@ -175,7 +176,7 @@ def _evaluate_domain(
         target = target.to(device, non_blocking=True)
 
         if state.should_adapt:
-            if needs_source_model(args):
+            if needs_ctta_loop(args):
                 loss_reports.extend(
                     test_time_tuning_ctta(
                         image_name[0],
