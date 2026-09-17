@@ -25,6 +25,7 @@ from ctta.adaptation import (
 from ctta.corruptions import expand_corruptions
 from ctta.dataset import CorruptedRemoteDataset
 from ctta.metrics import summarize_progress, summarize_results
+from ctta.modules.safs import TemporalSAFSGate
 from ctta.state import AdaptationStateController
 from data.cls_to_names_remote import (
     OpenEarthMap_classes,
@@ -78,9 +79,16 @@ def _validate_protocol(args):
     if args.reset_mode != 'source' and args.tta_steps <= 0:
         raise ValueError('Non-source CTTA modes require --tta_steps > 0.')
     if args.reset_mode == 'source' and needs_source_model(args):
-        raise ValueError('DAF-derived stabilization losses are adaptation modules and cannot be used with --reset_mode source.')
+        raise ValueError('DAF-derived stabilization modules cannot be used with --reset_mode source.')
     if args.loss_prompt_feat_cons and not args.text_shift:
         raise ValueError('--loss_prompt_feat_cons requires --text_shift; otherwise the prompt feature is fixed.')
+    if args.module_safs:
+        if args.safs_window < 2:
+            raise ValueError('--safs_window must be >= 2.')
+        if args.safs_warmup < 1 or args.safs_warmup > args.safs_window:
+            raise ValueError('--safs_warmup must be in [1, safs_window].')
+        if args.alpha_safs < 0:
+            raise ValueError('--alpha_safs must be non-negative.')
 
 
 def _build_transform():
@@ -114,6 +122,16 @@ def _build_model_and_optimizer(args, classnames, device):
     return model, optimizer, source_model
 
 
+def _build_safs_gate(args):
+    if not args.module_safs:
+        return None
+    return TemporalSAFSGate(
+        alpha=args.alpha_safs,
+        window=args.safs_window,
+        warmup=args.safs_warmup,
+    )
+
+
 def _evaluate_domain(
     args,
     set_id,
@@ -124,6 +142,7 @@ def _evaluate_domain(
     state,
     device,
     source_model=None,
+    safs_gate=None,
 ):
     dataset = CorruptedRemoteDataset(
         set_id=set_id,
@@ -167,6 +186,7 @@ def _evaluate_domain(
                         scaler,
                         args,
                         source_model=source_model,
+                        safs_gate=safs_gate,
                     )
                 )
             else:
@@ -219,6 +239,17 @@ def _stabilization_config(args):
                 'penalize moving away from the frozen-source assigned class or toward non-anchor classes'
             ),
         },
+        'safs': {
+            'enabled': bool(args.module_safs),
+            'alpha': args.alpha_safs,
+            'window': args.safs_window,
+            'warmup': args.safs_warmup,
+            'definition': (
+                'Streaming analogue of DAF SAFS for strict batch-size-one CTTA: '
+                'gate optimizer updates using prediction drift against a frozen source anchor '
+                'and a rolling mean - alpha * std threshold'
+            ),
+        },
     }
 
 
@@ -231,6 +262,9 @@ def _result_tag(args):
         parts.append(f'pfeat-{args.prompt_feat_cons_type}-{weight}')
     if args.loss_cmac:
         parts.append(f'cmac{args.lamb_cmac:g}'.replace('.', 'p'))
+    if args.module_safs:
+        alpha = f'{args.alpha_safs:g}'.replace('.', 'p')
+        parts.append(f'safs-a{alpha}-w{args.safs_window}-u{args.safs_warmup}')
     return '_'.join(parts)
 
 
@@ -247,11 +281,15 @@ def run_dataset(args, set_id, device):
     scaler = torch.cuda.amp.GradScaler(init_scale=1e3, enabled=device.type == 'cuda')
     state = AdaptationStateController(model, optimizer, args, args.reset_mode)
     state.before_stream()
+    safs_gate = _build_safs_gate(args)
 
     stream_results = []
     domains = []
     for domain_index, corruption in enumerate(corruptions):
         state.before_domain(domain_index)
+        if safs_gate is not None and args.reset_mode in ('episodic', 'domain'):
+            safs_gate.reset()
+
         domain_results, loss_summary = _evaluate_domain(
             args,
             set_id,
@@ -262,6 +300,7 @@ def run_dataset(args, set_id, device):
             state,
             device,
             source_model=source_model,
+            safs_gate=safs_gate,
         )
         stream_results.extend(domain_results)
         domain_metrics = summarize_results(domain_results)
