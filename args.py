@@ -1,4 +1,41 @@
 import argparse
+import os
+import tempfile
+from pathlib import Path
+
+
+def _build_single_prompt_file(name_path: str) -> str:
+    """Create a per-process single-prompt view of an existing Cat-Prompt file.
+
+    Each non-empty source line keeps only the text before the first ``|``.
+    This preserves the dataset's canonical category wording while removing all
+    Cat-Prompt descriptions. A temporary file is used so the original prompt
+    configuration is never modified, including under multi-process evaluation.
+    """
+    source = Path(name_path)
+    if not source.is_file():
+        raise FileNotFoundError(
+            f'Cannot disable Cat-Prompt because --name_path does not exist: {name_path}'
+        )
+
+    category_prompts = []
+    for line in source.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        category_prompt = line.split('|', 1)[0].strip()
+        if category_prompt:
+            category_prompts.append(category_prompt)
+
+    if not category_prompts:
+        raise ValueError(f'No category prompts found in {name_path}.')
+
+    fd, output_path = tempfile.mkstemp(
+        prefix=f'tmpa_{source.stem}_single_{os.getpid()}_',
+        suffix='.txt',
+    )
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(category_prompts) + '\n')
+    return output_path
 
 
 def parse_args():
@@ -226,9 +263,28 @@ def parse_args():
     parser.add_argument('--use_susx_feats', action='store_true')
 
     parser.add_argument('--world_size', default=-1, type=int, help='number of nodes for distributed training')
-    parser.add_argument('--rank', default=-1, type=int, help='node rank for distributed training')
+    parser.add_argument('--rank', default=-1, type=int, help='node rank')
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
     parser.add_argument('--save_result', type=str, default='result.txt', help='path to save result file')
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Master Cat-Prompt switch: expose the original multi-description prompt
+    # file as a one-category-name-per-class file without touching model code or
+    # mutating the checked-in prompt configuration.
+    args.cat_prompt_source_path = args.name_path
+    if not args.module_cat_prompt:
+        args.name_path = _build_single_prompt_file(args.name_path)
+
+    # Master VGTA switch. The original implementation exposes its mechanics as
+    # several legacy flags; normalize them here so both the original evaluator
+    # and the CTTA evaluator see one unambiguous module-level switch.
+    if not args.module_vgta:
+        args.text_adjust = False
+        args.text_shift = False
+        args.do_shift = False
+        args.do_scale = False
+        args.do_film = False
+
+    return args
