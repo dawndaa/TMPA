@@ -1,12 +1,13 @@
 import argparse
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Test-time Prompt Tuning')
     parser.add_argument('data', metavar='DIR', help='path to dataset root')
     parser.add_argument('--test_sets', type=str, default='A/R/V/K/I', help='test dataset (multiple datasets split by slash)')
     parser.add_argument('--dataset_mode', type=str, default='test', help='which split to use: train/val/test')
     parser.add_argument('-a', '--arch', metavar='ARCH', default='RN50')
-    parser.add_argument('--resolution', default=448, type=int, help='CLIP image resolution')  
+    parser.add_argument('--resolution', default=448, type=int, help='CLIP image resolution')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('-b', '--batch_size', default=64, type=int, metavar='N')
@@ -17,15 +18,64 @@ def parse_args():
     parser.add_argument('--gpu', default=0, type=int,
                         help='GPU id to use.')
     parser.add_argument('--tpt', action='store_true', default=False, help='run test-time prompt tuning')
-    # parser.add_argument('--selection_p', default=0.1, type=float, help='confidence selection percentile')
-    parser.add_argument('--selection_p', default=6, type=float, help='confidence selection percentile') 
-    parser.add_argument('--vis_feat', default=None)  
+    parser.add_argument('--selection_p', default=6, type=float, help='confidence selection percentile')
+    parser.add_argument('--vis_feat', default=None)
     parser.add_argument('--tta_steps', default=1, type=int, help='test-time-adapt steps')
     parser.add_argument('--n_ctx', default=4, type=int, help='number of tunable text tokens')
     parser.add_argument('--ctx_init', default=None, type=str, help='init tunable text prompts')
     parser.add_argument('--cocoop', action='store_true', default=False, help="use cocoop's output as prompt initialization")
     parser.add_argument('--load', default=None, type=str, help='path to a pre-trained coop/cocoop')
     parser.add_argument('--seed', type=int, default=0)
+
+    # CTTA / DAF evaluation protocol
+    parser.add_argument(
+        '--reset_mode',
+        type=str,
+        default='episodic',
+        choices=('source', 'episodic', 'domain', 'continual'),
+        help=(
+            'TTA state protocol: source=no adaptation; episodic=reset before every sample; '
+            'domain=reset at every corruption domain; continual=never reset inside the stream.'
+        ),
+    )
+    parser.add_argument(
+        '--corruptions_list',
+        nargs='+',
+        default=['original'],
+        help=(
+            "Corruption domains in stream order. Use 'common' for the 15 DAF/ImageNet-C corruptions, "
+            "or specify names explicitly. 'original' evaluates clean images."
+        ),
+    )
+    parser.add_argument(
+        '--corruption_severity',
+        type=int,
+        default=5,
+        choices=(1, 2, 3, 4, 5),
+        help='DAF corruption severity. DAF main experiments use severity 5.',
+    )
+    parser.add_argument(
+        '--daf_root',
+        type=str,
+        default=None,
+        help=(
+            'Path to the DAF repository. The CTTA evaluator reuses '
+            'DAF/utils/imagecorruptions exactly, including frost assets.'
+        ),
+    )
+    parser.add_argument(
+        '--ctta_progress',
+        nargs='+',
+        type=float,
+        default=[0.1, 0.2, 0.4, 0.8, 1.0],
+        help='Fractions of the continual stream at which cumulative metrics are reported.',
+    )
+    parser.add_argument(
+        '--ctta_result_dir',
+        type=str,
+        default='save_result/ctta',
+        help='Directory for CTTA JSON result files.',
+    )
 
     # TPS
     parser.add_argument('--img_aug', action="store_true")
@@ -34,19 +84,18 @@ def parse_args():
     parser.add_argument('--with_coop', action="store_true")
     parser.add_argument('--concept_type', type=str, default='gpt4', help='concepts to choose from')
     parser.add_argument('--logname', type=str)
-    parser.add_argument('--loss_prompt', default=False)   
-    parser.add_argument('--text_adjust', default=False)  
-    parser.add_argument('--alpha', default=0.02, type = float)  
-    # parser.add_argument('--alpha_cls', default=0.02, type = float)   
-    parser.add_argument('--tps_entropy_scale', default=1.0, type = float)   
-    
-    parser.add_argument('--prob_thd', default=0.1, type = float)  
-    parser.add_argument('--cls_token_lambda', default=-0.3, type = float)  
-    parser.add_argument('--logit_scale', default=-0.3, type = float)  
-    parser.add_argument('--logit_weight', default=-0.3, type = float) 
-    parser.add_argument('--bg_idx', default=-0.3, type = float)  
-    parser.add_argument('--prompt_logit_scale', default=1.0, type = float) 
-    parser.add_argument('--prompt_logit_weight', default=1.0, type = float)  
+    parser.add_argument('--loss_prompt', default=False)
+    parser.add_argument('--text_adjust', default=False)
+    parser.add_argument('--alpha', default=0.02, type=float)
+    parser.add_argument('--tps_entropy_scale', default=1.0, type=float)
+
+    parser.add_argument('--prob_thd', default=0.1, type=float)
+    parser.add_argument('--cls_token_lambda', default=-0.3, type=float)
+    parser.add_argument('--logit_scale', default=-0.3, type=float)
+    parser.add_argument('--logit_weight', default=-0.3, type=float)
+    parser.add_argument('--bg_idx', default=-0.3, type=float)
+    parser.add_argument('--prompt_logit_scale', default=1.0, type=float)
+    parser.add_argument('--prompt_logit_weight', default=1.0, type=float)
 
     parser.add_argument('--init_concepts', action="store_true")
     parser.add_argument('--per_label', action="store_true")
@@ -73,6 +122,4 @@ def parse_args():
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
     parser.add_argument('--save_result', type=str, default='result.txt', help='path to save result file')
 
-    args = parser.parse_args()
-
-    return args
+    return parser.parse_args()
