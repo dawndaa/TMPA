@@ -81,6 +81,11 @@ def _validate_protocol(args):
         raise ValueError('Non-source CTTA modes require --tta_steps > 0.')
     if args.reset_mode == 'source' and needs_ctta_loop(args):
         raise ValueError('DAF-derived stabilization modules cannot be used with --reset_mode source.')
+    if not args.module_vgta and needs_ctta_loop(args):
+        raise ValueError(
+            'DAF-derived stabilization modules require --module_vgta because disabling VGTA '
+            'removes TMPA\'s trainable test-time adaptation path.'
+        )
     if args.loss_prompt_feat_cons and not args.text_shift:
         raise ValueError('--loss_prompt_feat_cons requires --text_shift; otherwise the prompt feature is fixed.')
     if args.module_safs:
@@ -104,18 +109,19 @@ def _build_model_and_optimizer(args, classnames, device):
     model = get_shift_model(args, classnames).to(device)
     model.eval()
 
-    trainable_param = []
-    if args.text_shift:
-        trainable_param.extend(model.text_shifter.parameters())
-        if hasattr(model, 'text_shifter_visual'):
-            trainable_param.extend(model.text_shifter_visual.parameters())
-
     optimizer = None
-    if args.tta_steps > 0:
+    if args.module_vgta and args.tta_steps > 0:
+        trainable_param = []
+        if args.text_shift:
+            trainable_param.extend(model.text_shifter.parameters())
+            if hasattr(model, 'text_shifter_visual'):
+                trainable_param.extend(model.text_shifter_visual.parameters())
+
         other_params = [p for p in trainable_param if p is not model.alpha]
         param_groups = []
         if other_params:
             param_groups.append({'params': other_params, 'lr': args.lr})
+        # Keep the original TMPA optimizer semantics when VGTA is enabled.
         param_groups.append({'params': [model.alpha], 'lr': args.lr})
         optimizer = torch.optim.AdamW(param_groups)
 
@@ -216,6 +222,28 @@ def _evaluate_domain(
     return domain_results, summarize_loss_reports(loss_reports)
 
 
+def _tmpa_module_config(args):
+    return {
+        'cat_prompt': {
+            'enabled': bool(args.module_cat_prompt),
+            'mode': 'multi_description' if args.module_cat_prompt else 'single_category_name',
+            'source_prompt_file': getattr(args, 'cat_prompt_source_path', args.name_path),
+        },
+        'vgta': {
+            'enabled': bool(args.module_vgta),
+            'text_adjust': bool(args.module_vgta and args.text_adjust == 'True'),
+            'text_shift': bool(args.module_vgta and args.text_shift),
+            'do_shift': bool(args.module_vgta and args.do_shift),
+            'do_scale': bool(args.module_vgta and args.do_scale),
+            'do_film': bool(args.module_vgta and args.do_film),
+            'definition': (
+                'Master switch for TMPA visual-guided prompt calibration and the learnable '
+                'test-time prompt-shift path. Disabling it bypasses both mechanisms.'
+            ),
+        },
+    }
+
+
 def _stabilization_config(args):
     return {
         'source_consistency': {
@@ -264,6 +292,11 @@ def _stabilization_config(args):
 
 def _result_tag(args):
     parts = [args.reset_mode, f'sev{args.corruption_severity}']
+    # Keep legacy filenames unchanged for the default full-TMPA configuration.
+    if not args.module_cat_prompt:
+        parts.append('nocatprompt')
+    if not args.module_vgta:
+        parts.append('novgta')
     if args.loss_src_cons:
         parts.append(f'srccons{args.lamb_src_cons:g}'.replace('.', 'p'))
     if args.loss_prompt_feat_cons:
@@ -339,6 +372,8 @@ def run_dataset(args, set_id, device):
             'tta_steps': args.tta_steps,
             'batch_size': 1,
             'stream_semantics': 'strict sequential single-process',
+            'adaptation_enabled': bool(args.reset_mode != 'source' and optimizer is not None),
+            'tmpa_modules': _tmpa_module_config(args),
             'stabilization': _stabilization_config(args),
         },
         'domains': domains,
