@@ -205,23 +205,38 @@ def parse_args():
         action='store_false',
         help='Disable Cat-Prompt and use exactly one naive category-name prompt per class.',
     )
-    vgta_group = parser.add_mutually_exclusive_group()
-    vgta_group.add_argument(
-        '--module_vgta',
-        dest='module_vgta',
+
+    visual_guidance_group = parser.add_mutually_exclusive_group()
+    visual_guidance_group.add_argument(
+        '--module_visual_guidance',
+        dest='module_visual_guidance',
         action='store_true',
-        help='Enable TMPA Visual-Guided Test-Time Adaptation (default).',
+        help='Enable TMPA visual-guided prompt adjustment when --text_adjust True (default).',
     )
-    vgta_group.add_argument(
-        '--no_module_vgta',
-        dest='module_vgta',
+    visual_guidance_group.add_argument(
+        '--no_module_visual_guidance',
+        dest='module_visual_guidance',
         action='store_false',
         help=(
-            'Disable VGTA. Visual-guided text adjustment and learnable text-shift '
-            'adaptation are bypassed even if their legacy flags are present.'
+            'Disable only TMPA visual-guided prompt adjustment. Test-time optimization '
+            'remains controlled by the existing reset_mode/tta_steps/text_shift logic.'
         ),
     )
-    parser.set_defaults(module_cat_prompt=True, module_vgta=True)
+    # Backward-compatible aliases for commands produced before VGTA was split.
+    # They now control visual guidance only; they no longer disable TTA updates.
+    visual_guidance_group.add_argument(
+        '--module_vgta',
+        dest='module_visual_guidance',
+        action='store_true',
+        help=argparse.SUPPRESS,
+    )
+    visual_guidance_group.add_argument(
+        '--no_module_vgta',
+        dest='module_visual_guidance',
+        action='store_false',
+        help=argparse.SUPPRESS,
+    )
+    parser.set_defaults(module_cat_prompt=True, module_visual_guidance=True)
 
     # TPS
     parser.add_argument('--img_aug', action="store_true")
@@ -270,21 +285,16 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Master Cat-Prompt switch: expose the original multi-description prompt
-    # file as a one-category-name-per-class file without touching model code or
-    # mutating the checked-in prompt configuration.
+    # Cat-Prompt switch: expose the original multi-description prompt file as a
+    # one-category-name-per-class file without modifying checked-in configs.
     args.cat_prompt_source_path = args.name_path
     if not args.module_cat_prompt:
         args.name_path = _build_single_prompt_file(args.name_path)
 
-    # Master VGTA switch. The original implementation exposes its mechanics as
-    # several legacy flags; normalize them here so both the original evaluator
-    # and the CTTA evaluator see one unambiguous module-level switch.
-    if not args.module_vgta:
+    # Visual Guidance is now independent from test-time optimization. Turning it
+    # off gates only TMPA's image-guided prompt adjustment; text_shift and the
+    # optimizer remain untouched and keep following the original TTA controls.
+    if not args.module_visual_guidance:
         args.text_adjust = False
-        args.text_shift = False
-        args.do_shift = False
-        args.do_scale = False
-        args.do_film = False
 
     return args
