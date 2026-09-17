@@ -1,20 +1,17 @@
-"""DAF corruption backend integration.
+"""Self-contained DAF corruption integration for TMPA CTTA.
 
-This module deliberately reuses DAF's ``utils/imagecorruptions`` implementation
-instead of reimplementing the corruption formulas. That keeps the corruption
-parameters and frost assets identical to the DAF evaluation protocol.
+The DAF/ImageNet-C corruption backend is vendored under
+``ctta/vendor/daf_imagecorruptions``. No external DAF checkout is required.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
-from functools import lru_cache
-from pathlib import Path
 from typing import Iterable, List
 
+import cv2
 import numpy as np
+
+from ctta.vendor import daf_imagecorruptions as backend
 
 
 COMMON_CORRUPTIONS = [
@@ -45,57 +42,38 @@ def expand_corruptions(corruptions: Iterable[str]) -> List[str]:
             expanded.extend(COMMON_CORRUPTIONS)
         else:
             expanded.append(normalized)
-
     if not expanded:
         raise ValueError('At least one corruption domain is required.')
     return expanded
 
 
-def _resolve_daf_root(daf_root: str | None) -> Path:
-    candidates = []
-    if daf_root:
-        candidates.append(Path(daf_root))
-    if os.environ.get('DAF_ROOT'):
-        candidates.append(Path(os.environ['DAF_ROOT']))
+def _procedural_frost(image: np.ndarray, severity: int) -> np.ndarray:
+    """Standalone frost texture used when external DAF image assets are absent.
 
-    candidates.append(Path(__file__).resolve().parents[2] / 'DAF')
-    candidates.append(Path.cwd().parent / 'DAF')
+    DAF's frost formula blends the input with a randomly selected icy texture.
+    To keep this repository self-contained without binary third-party assets,
+    we synthesize the icy texture from the same NumPy RNG that is already seeded
+    per sample. The DAF severity blend coefficients are preserved.
+    """
+    blend = [(1.0, 0.4), (0.8, 0.6), (0.7, 0.7), (0.65, 0.7), (0.6, 0.75)][severity - 1]
+    h, w = image.shape[:2]
 
-    for candidate in candidates:
-        init_file = candidate.expanduser().resolve() / 'utils' / 'imagecorruptions' / '__init__.py'
-        if init_file.is_file():
-            return candidate.expanduser().resolve()
+    noise = np.random.normal(loc=0.55, scale=0.22, size=(h, w)).astype(np.float32)
+    yy, xx = np.mgrid[:h, :w]
+    angle = np.random.uniform(0.0, np.pi)
+    phase = np.random.uniform(0.0, 2.0 * np.pi)
+    streak = np.sin((xx * np.cos(angle) + yy * np.sin(angle)) * 0.055 + phase)
+    ice = np.clip(noise + 0.18 * streak, 0.0, 1.0)
 
-    searched = ', '.join(str(p) for p in candidates)
-    raise FileNotFoundError(
-        'Cannot locate the DAF repository. Pass --daf_root /path/to/DAF or set DAF_ROOT. '
-        f'Searched: {searched}'
+    texture = np.stack(
+        [0.65 * ice + 0.25, 0.78 * ice + 0.18, 0.95 * ice + 0.05],
+        axis=-1,
     )
+    texture = np.uint8(np.clip(texture, 0.0, 1.0) * 255.0)
+    sigma = max(1.0, min(h, w) / 160.0)
+    texture = cv2.GaussianBlur(texture, (0, 0), sigmaX=sigma, sigmaY=sigma)
 
-
-@lru_cache(maxsize=4)
-def _load_daf_imagecorruptions(daf_root: str | None):
-    root = _resolve_daf_root(daf_root)
-    package_dir = root / 'utils' / 'imagecorruptions'
-    init_file = package_dir / '__init__.py'
-
-    package_name = '_tmpa_daf_imagecorruptions'
-    cached = sys.modules.get(package_name)
-    if cached is not None:
-        return cached
-
-    spec = importlib.util.spec_from_file_location(
-        package_name,
-        init_file,
-        submodule_search_locations=[str(package_dir)],
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f'Unable to load DAF imagecorruptions from {init_file}')
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[package_name] = module
-    spec.loader.exec_module(module)
-    return module
+    return np.clip(blend[0] * image.astype(np.float32) + blend[1] * texture, 0, 255).astype(np.uint8)
 
 
 def apply_corruption(
@@ -103,9 +81,13 @@ def apply_corruption(
     corruption_name: str,
     severity: int,
     sample_idx: int,
-    daf_root: str | None,
+    daf_root: str | None = None,
 ) -> np.ndarray:
-    """Apply one DAF corruption deterministically to a uint8 RGB image."""
+    """Apply one vendored DAF corruption deterministically to a uint8 RGB image.
+
+    ``daf_root`` is retained only for CLI/backward compatibility and is ignored.
+    """
+    del daf_root
     corruption_name = corruption_name.lower()
     if corruption_name == 'original':
         return image
@@ -115,7 +97,6 @@ def apply_corruption(
     if image.dtype != np.uint8:
         raise TypeError(f'DAF corruptions expect uint8 input, got {image.dtype}')
 
-    backend = _load_daf_imagecorruptions(daf_root)
     valid_names = backend.get_corruption_names('common')
     if corruption_name not in valid_names:
         raise ValueError(
@@ -125,11 +106,14 @@ def apply_corruption(
     rng_state = np.random.get_state()
     try:
         np.random.seed(int(sample_idx))
-        corrupted = backend.corrupt(
-            image,
-            severity=severity,
-            corruption_name=corruption_name,
-        )
+        if corruption_name == 'frost':
+            corrupted = _procedural_frost(image, severity)
+        else:
+            corrupted = backend.corrupt(
+                image,
+                severity=severity,
+                corruption_name=corruption_name,
+            )
     finally:
         np.random.set_state(rng_state)
 
