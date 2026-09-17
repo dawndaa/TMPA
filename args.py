@@ -77,6 +77,40 @@ def parse_args():
         help='Directory for CTTA JSON result files.',
     )
 
+    # Phase-2 DAF-derived stabilization modules
+    parser.add_argument(
+        '--loss_src_cons',
+        action='store_true',
+        help='Enable DAF-style source prediction consistency against a frozen TMPA source model.',
+    )
+    parser.add_argument(
+        '--lamb_src_cons',
+        type=float,
+        default=1.0,
+        help='Weight for source prediction consistency.',
+    )
+    parser.add_argument(
+        '--loss_prompt_feat_cons',
+        action='store_true',
+        help=(
+            'Enable prompt/text feature consistency. This is the TMPA-space counterpart '
+            'to DAF visual feature consistency because TMPA freezes its visual encoder.'
+        ),
+    )
+    parser.add_argument(
+        '--lamb_prompt_feat_cons',
+        type=float,
+        default=1.0,
+        help='Weight for prompt/text feature consistency.',
+    )
+    parser.add_argument(
+        '--prompt_feat_cons_type',
+        type=str,
+        default='cosine',
+        choices=('cosine', 'l2'),
+        help='Distance used by prompt/text feature consistency.',
+    )
+
     # TPS
     parser.add_argument('--img_aug', action="store_true")
     parser.add_argument('--with_concepts', action="store_true")
