@@ -110,6 +110,21 @@ def parse_args():
         choices=('cosine', 'l2'),
         help='Distance used by prompt/text feature consistency.',
     )
+    parser.add_argument(
+        '--loss_cmac',
+        action='store_true',
+        help=(
+            'Enable DAF-inspired CMAC directional source anchoring. The frozen source '
+            'prediction assigns each pixel an anchor class; harmful drift away from the '
+            'anchor or toward non-anchor classes is penalized.'
+        ),
+    )
+    parser.add_argument(
+        '--lamb_cmac',
+        type=float,
+        default=1.0,
+        help='Weight for the CMAC directional source-anchor loss.',
+    )
 
     # TPS
     parser.add_argument('--img_aug', action="store_true")
