@@ -59,8 +59,8 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            'Path to the DAF repository. The CTTA evaluator reuses '
-            'DAF/utils/imagecorruptions exactly, including frost assets.'
+            'Deprecated compatibility option. DAF corruption code is vendored inside TMPA, '
+            'so no external DAF checkout is required and this value is ignored.'
         ),
     )
     parser.add_argument(
