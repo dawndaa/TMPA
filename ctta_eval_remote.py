@@ -78,7 +78,7 @@ def _validate_protocol(args):
     if args.reset_mode != 'source' and args.tta_steps <= 0:
         raise ValueError('Non-source CTTA modes require --tta_steps > 0.')
     if args.reset_mode == 'source' and needs_source_model(args):
-        raise ValueError('Consistency losses are adaptation modules and cannot be used with --reset_mode source.')
+        raise ValueError('DAF-derived stabilization losses are adaptation modules and cannot be used with --reset_mode source.')
     if args.loss_prompt_feat_cons and not args.text_shift:
         raise ValueError('--loss_prompt_feat_cons requires --text_shift; otherwise the prompt feature is fixed.')
 
@@ -211,6 +211,14 @@ def _stabilization_config(args):
                 'DAF visual feature consistency is not copied directly because TMPA freezes visual features'
             ),
         },
+        'cmac': {
+            'enabled': bool(args.loss_cmac),
+            'weight': args.lamb_cmac,
+            'definition': (
+                'DAF-style directional source anchoring mapped to TMPA pixel class probabilities: '
+                'penalize moving away from the frozen-source assigned class or toward non-anchor classes'
+            ),
+        },
     }
 
 
@@ -221,6 +229,8 @@ def _result_tag(args):
     if args.loss_prompt_feat_cons:
         weight = f'{args.lamb_prompt_feat_cons:g}'.replace('.', 'p')
         parts.append(f'pfeat-{args.prompt_feat_cons_type}-{weight}')
+    if args.loss_cmac:
+        parts.append(f'cmac{args.lamb_cmac:g}'.replace('.', 'p'))
     return '_'.join(parts)
 
 
