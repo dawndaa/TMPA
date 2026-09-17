@@ -126,6 +126,20 @@ def parse_args():
         help='Weight for the CMAC directional source-anchor loss.',
     )
     parser.add_argument(
+        '--loss_div',
+        action='store_true',
+        help=(
+            'Enable DAF-style class diversity regularization. The loss maximizes the entropy '
+            'of the marginal class distribution across pixels to discourage class collapse.'
+        ),
+    )
+    parser.add_argument(
+        '--lamb_div',
+        type=float,
+        default=1.0,
+        help='Weight for the DAF-style class diversity loss.',
+    )
+    parser.add_argument(
         '--module_safs',
         action='store_true',
         help=(
