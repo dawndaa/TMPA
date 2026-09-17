@@ -2,11 +2,15 @@
 
 ## Scope
 
-Phase 1 changes the **evaluation protocol only**. It keeps TMPA's remote-sensing
+The project is split into two controlled stages.
+
+**Phase 1** changes the evaluation protocol only. It keeps TMPA's remote-sensing
 datasets, prompts, model, SimFeatUp inference and entropy-based adaptation, while
 reusing DAF's corruption implementation and continual reset semantics.
 
-No DAF adaptation loss/module is enabled in Phase 1.
+**Phase 2** keeps that protocol fixed and adds DAF-derived stabilization modules
+one at a time. This makes every gain attributable to an explicit module rather
+than to a changed stream or corruption setup.
 
 ## Corruption stream
 
@@ -58,7 +62,7 @@ binary resources into TMPA during Phase 1.
 
 Pass `--daf_root /path/to/DAF` or set `DAF_ROOT`.
 
-## Example
+## Phase-1 baseline example
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
@@ -82,9 +86,77 @@ CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
 Run the same command with `source`, `episodic`, `domain`, and `continual` to
 produce the Phase-1 comparison matrix.
 
-## Phase 2
+## Phase-2 module 1: source prediction consistency
 
-DAF source consistency, feature consistency, CMAC, and SAFS should be migrated
-one at a time under `ctta/modules/`, keeping this Phase-1 protocol fixed. This
-allows each stabilization module's contribution to be measured against the
-same TMPA-Continual baseline.
+DAF computes a symmetric KL penalty between the adapted segmentation prediction
+and a frozen source model prediction. TMPA exposes post-processed class
+probability maps rather than DAF's raw class logits, so the maps are normalized
+per pixel and the same symmetric-KL principle is applied.
+
+Enable it with:
+
+```bash
+--loss_src_cons --lamb_src_cons 1.0
+```
+
+A frozen source copy is created only when a Phase-2 consistency module is enabled.
+The ordinary Phase-1 path does not allocate the extra source model.
+
+## Phase-2 module 2: prompt/text feature consistency
+
+DAF's original feature consistency compares adapted **visual** features with
+frozen source visual features. That loss cannot be copied literally into TMPA:
+TMPA freezes the visual encoder and SimFeatUp during adaptation, so adapted and
+source visual features are the same and the loss would be identically zero.
+
+The TMPA-space counterpart therefore regularizes the feature that actually
+changes during adaptation: the shifted prompt/text embedding.
+
+Enable it with:
+
+```bash
+--loss_prompt_feat_cons \
+--lamb_prompt_feat_cons 1.0 \
+--prompt_feat_cons_type cosine
+```
+
+`cosine` and `l2` are supported. The option requires `--text_shift` so a
+meaningful adaptive prompt feature exists.
+
+## Phase-2 ablation matrix
+
+Keep the same dataset, corruption order, severity, seed, learning rate and TTA
+steps for every row:
+
+1. TMPA-Continual
+2. TMPA-Continual + Source Consistency
+3. TMPA-Continual + Prompt Feature Consistency
+4. TMPA-Continual + Source Consistency + Prompt Feature Consistency
+
+Example for source consistency:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
+  --test_sets loveda \
+  -a ViT-B/16 -b 1 --gpu 0 \
+  --lr 1e-4 --tta_steps 3 \
+  --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --text_shift --do_shift --per_label \
+  --text_adjust True \
+  --reset_mode continual \
+  --corruptions_list common \
+  --corruption_severity 5 \
+  --daf_root /path/to/DAF \
+  --loss_src_cons --lamb_src_cons 1.0
+```
+
+Result filenames include enabled module names and weights, so Phase-2 runs do
+not overwrite the Phase-1 baseline.
+
+## Next modules
+
+CMAC and SAFS should be integrated only after the two consistency modules are
+run independently. Their implementation should preserve the same Phase-1 stream
+and report an independent ablation before any combined configuration is treated
+as the full method.
