@@ -100,7 +100,7 @@ class TestTimeShiftTuning(nn.Module):
         self.test_set = test_set
         self.use_susx_feats = use_susx_feats
         
-        self.net = create_model('ViT-B/16', pretrained='openai') 
+        self.net = create_model('ViT-B/16', pretrained='openai', cache_dir=DOWNLOAD_ROOT)
 
         self.net.eval().to(device) 
         self.tokenizer = tokenizer.tokenize 
@@ -286,7 +286,7 @@ class TestTimeShiftTuning(nn.Module):
             
         if self.output_cls_token:
             image_cls_token, image_features = image_features  
-            image_cls_token /= image_cls_token.norm(dim=-1, keepdim=True)
+            image_cls_token = image_cls_token / image_cls_token.norm(dim=-1, keepdim=True)
 
             cls_logits = image_cls_token.to(device) @ self.text_features.T.to(device)  
 
@@ -329,7 +329,7 @@ class TestTimeShiftTuning(nn.Module):
             with torch.cuda.amp.autocast():
                 image_features = self.upsampler(image_features, img).half()  
             image_features = image_features.view(-1, self.feat_dim, image_w * image_h).permute(0, 2, 1)  
-        image_features /= image_features.norm(dim=-1, keepdim=True)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         if args.text_adjust == 'True':
             logits = image_features.to(device) @ updated_query_features.T.to(device)  

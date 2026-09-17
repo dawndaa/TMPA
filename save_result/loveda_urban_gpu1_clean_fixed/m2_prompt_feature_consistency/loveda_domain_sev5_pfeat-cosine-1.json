@@ -1,0 +1,92 @@
+{
+  "dataset": "loveda",
+  "protocol": {
+    "reset_mode": "domain",
+    "corruptions": [
+      "original"
+    ],
+    "corruption_severity": 5,
+    "tta_steps": 1,
+    "batch_size": 1,
+    "stream_semantics": "strict sequential single-process",
+    "stabilization": {
+      "source_consistency": {
+        "enabled": false,
+        "weight": 1.0,
+        "definition": "DAF-style symmetric KL against frozen source prediction"
+      },
+      "prompt_feature_consistency": {
+        "enabled": true,
+        "weight": 1.0,
+        "type": "cosine",
+        "definition": "TMPA prompt/text-space counterpart to DAF visual feature consistency; DAF visual feature consistency is not copied directly because TMPA freezes visual features"
+      },
+      "cmac": {
+        "enabled": false,
+        "weight": 1.0,
+        "definition": "DAF-style directional source anchoring mapped to TMPA pixel class probabilities: penalize moving away from the frozen-source assigned class or toward non-anchor classes"
+      },
+      "safs": {
+        "enabled": false,
+        "alpha": 0.5,
+        "window": 32,
+        "warmup": 8,
+        "definition": "Streaming analogue of DAF SAFS for strict batch-size-one CTTA: gate optimizer updates using prediction drift against a frozen source anchor and a rolling mean - alpha * std threshold"
+      }
+    }
+  },
+  "domains": [
+    {
+      "index": 0,
+      "corruption": "original",
+      "num_samples": 677,
+      "metrics": {
+        "aAcc": 38.45,
+        "mIoU": 26.35,
+        "mAcc": 46.14
+      },
+      "adaptation_losses": {
+        "total": 0.46362280290975527,
+        "base": 0.45423015507496617,
+        "entropy": 0.45423015507496617,
+        "source_consistency": 0.0,
+        "prompt_feature_consistency": 0.009392648476778565,
+        "cmac": 0.0,
+        "safs_keep": 1.0,
+        "safs_filter_rate": 0.0
+      }
+    }
+  ],
+  "stream_metrics": {
+    "aAcc": 38.45,
+    "mIoU": 26.35,
+    "mAcc": 46.14
+  },
+  "stream_progress": {
+    "0.10": {
+      "aAcc": 52.65,
+      "mIoU": 37.57,
+      "mAcc": 56.25
+    },
+    "0.20": {
+      "aAcc": 50.83,
+      "mIoU": 36.08,
+      "mAcc": 55.71
+    },
+    "0.40": {
+      "aAcc": 46.64,
+      "mIoU": 32.91,
+      "mAcc": 52.76
+    },
+    "0.80": {
+      "aAcc": 40.07,
+      "mIoU": 27.8,
+      "mAcc": 47.65
+    },
+    "1.00": {
+      "aAcc": 38.45,
+      "mIoU": 26.35,
+      "mAcc": 46.14
+    }
+  }
+}

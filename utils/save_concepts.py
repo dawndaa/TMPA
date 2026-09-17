@@ -47,7 +47,7 @@ CLASSES_DICT = {
 }
 
 device='cuda'
-DOWNLOAD_ROOT='checkpoints/clip'
+DOWNLOAD_ROOT='/data/ckpt'
 
 def make_descriptor_sentence(descriptor):
 # Code from https://github.com/sachit-menon/classify_by_description_release/blob/master/descriptor_strings.py#L43
@@ -152,4 +152,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     save_concepts(args)
-    

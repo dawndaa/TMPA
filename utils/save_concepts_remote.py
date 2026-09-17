@@ -135,7 +135,7 @@ openai_imagenet_template = [
 ]
 
 device='cuda'
-DOWNLOAD_ROOT='checkpoints/clip'
+DOWNLOAD_ROOT='/data/ckpt'
 
 def clean_string(expression):
     return re.sub(r"([.,'!?\"()*#:;])", '', expression.lower()).replace('-', ' ').replace('/', ' ')
@@ -154,7 +154,7 @@ def make_descriptor_sentence(descriptor):
 
 def save_concepts(args):
     # clip, _, _ = load(args.arch, device=device, download_root=DOWNLOAD_ROOT)
-    net = create_model('ViT-B/16', pretrained='openai', precision='fp16').to(device)
+    net = create_model('ViT-B/16', pretrained='openai', precision='fp16', cache_dir=DOWNLOAD_ROOT).to(device)
 
     if args.no_cond:
         suffix = "_no_cond"
@@ -275,4 +275,3 @@ if __name__ == '__main__':
         process_json_folder(args)
     else:
         save_concepts(args)
-    

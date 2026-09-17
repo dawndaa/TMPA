@@ -1,0 +1,85 @@
+{
+  "loveda": {
+    "dataset": "loveda",
+    "protocol": {
+      "reset_mode": "domain",
+      "corruptions": [
+        "original"
+      ],
+      "corruption_severity": 5,
+      "tta_steps": 1,
+      "batch_size": 1,
+      "stream_semantics": "strict sequential single-process",
+      "stabilization": {
+        "source_consistency": {
+          "enabled": false,
+          "weight": 1.0,
+          "definition": "DAF-style symmetric KL against frozen source prediction"
+        },
+        "prompt_feature_consistency": {
+          "enabled": false,
+          "weight": 1.0,
+          "type": "cosine",
+          "definition": "TMPA prompt/text-space counterpart to DAF visual feature consistency; DAF visual feature consistency is not copied directly because TMPA freezes visual features"
+        },
+        "cmac": {
+          "enabled": false,
+          "weight": 1.0,
+          "definition": "DAF-style directional source anchoring mapped to TMPA pixel class probabilities: penalize moving away from the frozen-source assigned class or toward non-anchor classes"
+        },
+        "safs": {
+          "enabled": false,
+          "alpha": 0.5,
+          "window": 32,
+          "warmup": 8,
+          "definition": "Streaming analogue of DAF SAFS for strict batch-size-one CTTA: gate optimizer updates using prediction drift against a frozen source anchor and a rolling mean - alpha * std threshold"
+        }
+      }
+    },
+    "domains": [
+      {
+        "index": 0,
+        "corruption": "original",
+        "num_samples": 677,
+        "metrics": {
+          "aAcc": 38.54,
+          "mIoU": 26.42,
+          "mAcc": 46.23
+        },
+        "adaptation_losses": {}
+      }
+    ],
+    "stream_metrics": {
+      "aAcc": 38.54,
+      "mIoU": 26.42,
+      "mAcc": 46.23
+    },
+    "stream_progress": {
+      "0.10": {
+        "aAcc": 52.66,
+        "mIoU": 37.58,
+        "mAcc": 56.26
+      },
+      "0.20": {
+        "aAcc": 50.82,
+        "mIoU": 36.07,
+        "mAcc": 55.71
+      },
+      "0.40": {
+        "aAcc": 46.63,
+        "mIoU": 32.89,
+        "mAcc": 52.74
+      },
+      "0.80": {
+        "aAcc": 40.14,
+        "mIoU": 27.83,
+        "mAcc": 47.7
+      },
+      "1.00": {
+        "aAcc": 38.54,
+        "mIoU": 26.42,
+        "mAcc": 46.23
+      }
+    }
+  }
+}
