@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import torch
 
+from ctta.modules.cmac import cmac_source_anchor_loss
 from ctta.modules.consistency import (
     prompt_feature_consistency,
     source_prediction_consistency,
@@ -14,11 +15,11 @@ from run_utils import avg_entropy_seg, loss_prompt_entropy
 
 
 def needs_source_model(args) -> bool:
-    return bool(args.loss_src_cons or args.loss_prompt_feat_cons)
+    return bool(args.loss_src_cons or args.loss_prompt_feat_cons or args.loss_cmac)
 
 
 def build_source_model(model, args):
-    """Create the frozen source anchor used by consistency losses."""
+    """Create the frozen source anchor used by consistency/CMAC losses."""
     if not needs_source_model(args):
         return None
 
@@ -75,11 +76,11 @@ def test_time_tuning_ctta(
     args,
     source_model=None,
 ):
-    """Run TMPA test-time tuning with optional source/prompt consistency."""
+    """Run TMPA test-time tuning with optional DAF-derived stabilizers."""
     if optimizer is None:
         return []
     if needs_source_model(args) and source_model is None:
-        raise ValueError('Consistency loss requested but no frozen source model was provided.')
+        raise ValueError('A source-anchored loss was requested but no frozen source model was provided.')
 
     reports = []
     autocast_enabled = inputs.is_cuda
@@ -87,7 +88,7 @@ def test_time_tuning_ctta(
     for _ in range(args.tta_steps):
         with torch.cuda.amp.autocast(enabled=autocast_enabled):
             source_prob_maps = None
-            if args.loss_src_cons:
+            if args.loss_src_cons or args.loss_cmac:
                 source_prob_maps = _forward_source(
                     source_model, image_name, inputs, ori_shape, args
                 )
@@ -111,10 +112,18 @@ def test_time_tuning_ctta(
                     loss_type=args.prompt_feat_cons_type,
                 )
 
+            cmac_loss = base_loss.new_zeros(())
+            if args.loss_cmac:
+                cmac_loss = cmac_source_anchor_loss(
+                    seg_prob_maps,
+                    source_prob_maps,
+                )
+
             total_loss = (
                 base_loss
                 + args.lamb_src_cons * src_cons_loss
                 + args.lamb_prompt_feat_cons * prompt_cons_loss
+                + args.lamb_cmac * cmac_loss
             )
 
         if total_loss.requires_grad and any(p.requires_grad for p in model.parameters()):
@@ -130,6 +139,7 @@ def test_time_tuning_ctta(
             'prompt': None if loss_prompt is None else float(loss_prompt.detach().item()),
             'source_consistency': float(src_cons_loss.detach().item()),
             'prompt_feature_consistency': float(prompt_cons_loss.detach().item()),
+            'cmac': float(cmac_loss.detach().item()),
         })
 
     return reports
