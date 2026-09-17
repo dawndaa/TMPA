@@ -151,6 +151,56 @@ Enable it with:
 --loss_cmac --lamb_cmac 1.0
 ```
 
+## Phase-2 module 4: temporal SAFS update gating
+
+DAF SAFS is a sample selector, not another loss. In DAF, visual feature drift is
+computed for every sample inside the current batch:
+
+```text
+shift = mean(1 - cosine(feature_adapt, feature_source))
+threshold = batch_mean(shift) - alpha_safs * batch_std(shift)
+keep = shift > threshold
+```
+
+That implementation cannot be copied literally into the strict CTTA evaluator,
+because this project intentionally uses `batch_size=1`. With one sample,
+`std=0` and the batch selector loses its filtering meaning.
+
+The transferred version therefore uses a **temporal SAFS** gate:
+
+1. compute a sample-specific drift score from the cosine distance between the
+   adapted and frozen-source pixel class-probability vectors;
+2. maintain the most recent `safs_window` scores;
+3. after `safs_warmup` scores, compute
+   `threshold = history_mean - alpha_safs * history_std`;
+4. execute the optimizer step only when `current_shift > threshold`;
+5. when the history has effectively zero variance, keep the sample rather than
+   filtering everything.
+
+This preserves DAF SAFS's central idea — adapt only on samples whose source/adapt
+shift is sufficiently informative relative to the current distribution — while
+making the selector well-defined for a temporal stream.
+
+Enable it with:
+
+```bash
+--module_safs \
+--alpha_safs 0.5 \
+--safs_window 32 \
+--safs_warmup 8
+```
+
+State semantics:
+
+- `continual`: the SAFS history is retained across corruption domains;
+- `domain`: the history is reset when the corruption domain changes;
+- `episodic`: the model itself resets each sample; SAFS is primarily intended
+  for continual/domain experiments, not as the main episodic baseline.
+
+The result JSON reports `safs_keep`, `safs_filter_rate`, `safs_shift`, threshold,
+history mean/std and history size so the gating behavior can be diagnosed rather
+than treated as a hidden heuristic.
+
 ## Phase-2 ablation matrix
 
 Keep the same dataset, corruption order, severity, seed, learning rate and TTA
@@ -160,9 +210,10 @@ steps for every row:
 2. TMPA-Continual + Source Consistency
 3. TMPA-Continual + Prompt Feature Consistency
 4. TMPA-Continual + CMAC
-5. TMPA-Continual + Source Consistency + Prompt Feature Consistency
+5. TMPA-Continual + SAFS
 6. TMPA-Continual + Source Consistency + CMAC
-7. TMPA-Continual + all implemented stabilizers
+7. TMPA-Continual + CMAC + SAFS
+8. TMPA-Continual + all implemented stabilizers
 
 Example for source consistency:
 
@@ -200,12 +251,23 @@ CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
   --loss_cmac --lamb_cmac 1.0
 ```
 
-Result filenames include enabled module names and weights, so Phase-2 runs do
-not overwrite the Phase-1 baseline.
+Example for SAFS:
 
-## Next module
+```bash
+CUDA_VISIBLE_DEVICES=0 python ctta_eval_remote.py /path/to/data \
+  --test_sets loveda \
+  -a ViT-B/16 -b 1 --gpu 0 \
+  --lr 1e-4 --tta_steps 3 \
+  --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --text_shift --do_shift --per_label \
+  --text_adjust True \
+  --reset_mode continual \
+  --corruptions_list common \
+  --corruption_severity 5 \
+  --daf_root /path/to/DAF \
+  --module_safs --alpha_safs 0.5 --safs_window 32 --safs_warmup 8
+```
 
-SAFS should be integrated after the three current stabilizers are evaluated
-independently. Its implementation should preserve the same Phase-1 stream and
-be treated as an update/sample-filtering mechanism rather than silently changing
-the corruption protocol.
+Result filenames include enabled module names and hyperparameters, so Phase-2
+runs do not overwrite the Phase-1 baseline.
