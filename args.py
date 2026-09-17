@@ -154,6 +154,38 @@ def parse_args():
     parser.add_argument('--safs_warmup', type=int, default=8,
                         help='Number of initial scores kept before temporal SAFS starts filtering.')
 
+    # TMPA main-module ablations. Defaults preserve the original full TMPA path.
+    cat_prompt_group = parser.add_mutually_exclusive_group()
+    cat_prompt_group.add_argument(
+        '--module_cat_prompt',
+        dest='module_cat_prompt',
+        action='store_true',
+        help='Enable TMPA Cat-Prompt multi-description prompts (default).',
+    )
+    cat_prompt_group.add_argument(
+        '--no_module_cat_prompt',
+        dest='module_cat_prompt',
+        action='store_false',
+        help='Disable Cat-Prompt and use exactly one naive category-name prompt per class.',
+    )
+    vgta_group = parser.add_mutually_exclusive_group()
+    vgta_group.add_argument(
+        '--module_vgta',
+        dest='module_vgta',
+        action='store_true',
+        help='Enable TMPA Visual-Guided Test-Time Adaptation (default).',
+    )
+    vgta_group.add_argument(
+        '--no_module_vgta',
+        dest='module_vgta',
+        action='store_false',
+        help=(
+            'Disable VGTA. Visual-guided text adjustment and learnable text-shift '
+            'adaptation are bypassed even if their legacy flags are present.'
+        ),
+    )
+    parser.set_defaults(module_cat_prompt=True, module_vgta=True)
+
     # TPS
     parser.add_argument('--img_aug', action="store_true")
     parser.add_argument('--with_concepts', action="store_true")
