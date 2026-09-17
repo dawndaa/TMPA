@@ -1,7 +1,14 @@
-"""DAF stabilization modules for phase-2 integration.
+"""DAF-derived stabilization modules for TMPA CTTA.
 
-Phase 1 establishes the corruption + CTTA protocol without changing TMPA's
-adaptation objective. DAF source consistency, feature consistency, CMAC and
-SAFS should be added here one at a time so their contribution can be measured
-against the TMPA-Continual baseline.
+Implemented:
+- source prediction consistency: DAF-style symmetric KL against a frozen source model.
+- prompt feature consistency: TMPA-specific counterpart to DAF visual feature
+  consistency, applied in the prompt/text space that TMPA actually adapts.
+
+Planned next: CMAC and SAFS, after the two consistency modules are evaluated
+independently against the fixed TMPA-Continual baseline.
 """
+
+from .consistency import prompt_feature_consistency, source_prediction_consistency
+
+__all__ = ['source_prediction_consistency', 'prompt_feature_consistency']
