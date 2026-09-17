@@ -125,6 +125,20 @@ def parse_args():
         default=1.0,
         help='Weight for the CMAC directional source-anchor loss.',
     )
+    parser.add_argument(
+        '--module_safs',
+        action='store_true',
+        help=(
+            'Enable temporal SAFS update gating. The original DAF batch-level selector is '
+            'adapted to strict batch-size-one CTTA using recent stream history.'
+        ),
+    )
+    parser.add_argument('--alpha_safs', type=float, default=0.5,
+                        help='SAFS threshold coefficient in mean - alpha * std.')
+    parser.add_argument('--safs_window', type=int, default=32,
+                        help='Number of recent shift scores used by temporal SAFS.')
+    parser.add_argument('--safs_warmup', type=int, default=8,
+                        help='Number of initial scores kept before temporal SAFS starts filtering.')
 
     # TPS
     parser.add_argument('--img_aug', action="store_true")
