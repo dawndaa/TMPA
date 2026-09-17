@@ -1,7 +1,8 @@
 """Strict single-stream CTTA evaluation for TMPA remote-sensing datasets.
 
 Keeps TMPA's remote datasets/model/adaptation, reuses DAF corruptions, and
-changes only the temporal reset policy. One temporal stream runs per process.
+changes only the temporal reset policy. Phase-2 stabilizers are opt-in so the
+Phase-1 TMPA-Continual baseline remains unchanged by default.
 """
 
 from __future__ import annotations
@@ -15,6 +16,12 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 
 from args import parse_args
+from ctta.adaptation import (
+    build_source_model,
+    needs_source_model,
+    summarize_loss_reports,
+    test_time_tuning_ctta,
+)
 from ctta.corruptions import expand_corruptions
 from ctta.dataset import CorruptedRemoteDataset
 from ctta.metrics import summarize_progress, summarize_results
@@ -70,6 +77,10 @@ def _validate_protocol(args):
         raise ValueError(f'Strict CTTA requires --batch_size 1, got {args.batch_size}.')
     if args.reset_mode != 'source' and args.tta_steps <= 0:
         raise ValueError('Non-source CTTA modes require --tta_steps > 0.')
+    if args.reset_mode == 'source' and needs_source_model(args):
+        raise ValueError('Consistency losses are adaptation modules and cannot be used with --reset_mode source.')
+    if args.loss_prompt_feat_cons and not args.text_shift:
+        raise ValueError('--loss_prompt_feat_cons requires --text_shift; otherwise the prompt feature is fixed.')
 
 
 def _build_transform():
@@ -99,10 +110,21 @@ def _build_model_and_optimizer(args, classnames, device):
         param_groups.append({'params': [model.alpha], 'lr': args.lr})
         optimizer = torch.optim.AdamW(param_groups)
 
-    return model, optimizer
+    source_model = build_source_model(model, args)
+    return model, optimizer, source_model
 
 
-def _evaluate_domain(args, set_id, corruption, model, optimizer, scaler, state, device):
+def _evaluate_domain(
+    args,
+    set_id,
+    corruption,
+    model,
+    optimizer,
+    scaler,
+    state,
+    device,
+    source_model=None,
+):
     dataset = CorruptedRemoteDataset(
         set_id=set_id,
         transform=_build_transform(),
@@ -125,6 +147,7 @@ def _evaluate_domain(args, set_id, corruption, model, optimizer, scaler, state, 
     )
 
     domain_results = []
+    loss_reports = []
     for image_name, images, ori_shape, target in tqdm(
         loader, total=len(loader), desc=f'{set_id}:{corruption}'
     ):
@@ -133,9 +156,25 @@ def _evaluate_domain(args, set_id, corruption, model, optimizer, scaler, state, 
         target = target.to(device, non_blocking=True)
 
         if state.should_adapt:
-            test_time_tuning(
-                image_name[0], model, images, ori_shape, optimizer, scaler, args
-            )
+            if needs_source_model(args):
+                loss_reports.extend(
+                    test_time_tuning_ctta(
+                        image_name[0],
+                        model,
+                        images,
+                        ori_shape,
+                        optimizer,
+                        scaler,
+                        args,
+                        source_model=source_model,
+                    )
+                )
+            else:
+                # Keep the original TMPA adaptation path bit-for-bit when no
+                # Phase-2 stabilizer is enabled.
+                test_time_tuning(
+                    image_name[0], model, images, ori_shape, optimizer, scaler, args
+                )
 
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
             if args.loss_prompt == 'True':
@@ -153,7 +192,36 @@ def _evaluate_domain(args, set_id, corruption, model, optimizer, scaler, state, 
                     ignore_index=255,
                 )
             )
-    return domain_results
+    return domain_results, summarize_loss_reports(loss_reports)
+
+
+def _stabilization_config(args):
+    return {
+        'source_consistency': {
+            'enabled': bool(args.loss_src_cons),
+            'weight': args.lamb_src_cons,
+            'definition': 'DAF-style symmetric KL against frozen source prediction',
+        },
+        'prompt_feature_consistency': {
+            'enabled': bool(args.loss_prompt_feat_cons),
+            'weight': args.lamb_prompt_feat_cons,
+            'type': args.prompt_feat_cons_type,
+            'definition': (
+                'TMPA prompt/text-space counterpart to DAF visual feature consistency; '
+                'DAF visual feature consistency is not copied directly because TMPA freezes visual features'
+            ),
+        },
+    }
+
+
+def _result_tag(args):
+    parts = [args.reset_mode, f'sev{args.corruption_severity}']
+    if args.loss_src_cons:
+        parts.append(f'srccons{args.lamb_src_cons:g}'.replace('.', 'p'))
+    if args.loss_prompt_feat_cons:
+        weight = f'{args.lamb_prompt_feat_cons:g}'.replace('.', 'p')
+        parts.append(f'pfeat-{args.prompt_feat_cons_type}-{weight}')
+    return '_'.join(parts)
 
 
 def run_dataset(args, set_id, device):
@@ -165,7 +233,7 @@ def run_dataset(args, set_id, device):
     classnames = CLASSES_DICT[set_id]
     corruptions = expand_corruptions(args.corruptions_list)
 
-    model, optimizer = _build_model_and_optimizer(args, classnames, device)
+    model, optimizer, source_model = _build_model_and_optimizer(args, classnames, device)
     scaler = torch.cuda.amp.GradScaler(init_scale=1e3, enabled=device.type == 'cuda')
     state = AdaptationStateController(model, optimizer, args, args.reset_mode)
     state.before_stream()
@@ -174,8 +242,16 @@ def run_dataset(args, set_id, device):
     domains = []
     for domain_index, corruption in enumerate(corruptions):
         state.before_domain(domain_index)
-        domain_results = _evaluate_domain(
-            args, set_id, corruption, model, optimizer, scaler, state, device
+        domain_results, loss_summary = _evaluate_domain(
+            args,
+            set_id,
+            corruption,
+            model,
+            optimizer,
+            scaler,
+            state,
+            device,
+            source_model=source_model,
         )
         stream_results.extend(domain_results)
         domain_metrics = summarize_results(domain_results)
@@ -184,12 +260,15 @@ def run_dataset(args, set_id, device):
             'corruption': corruption,
             'num_samples': len(domain_results),
             'metrics': domain_metrics,
+            'adaptation_losses': loss_summary,
         })
         print(
             f"[{set_id}] {corruption}: "
             f"mIoU={domain_metrics.get('mIoU', float('nan')):.2f}, "
             f"mAcc={domain_metrics.get('mAcc', float('nan')):.2f}"
         )
+        if loss_summary:
+            print(f'[{set_id}] {corruption} adaptation losses: {loss_summary}')
 
     return {
         'dataset': set_id,
@@ -200,6 +279,7 @@ def run_dataset(args, set_id, device):
             'tta_steps': args.tta_steps,
             'batch_size': 1,
             'stream_semantics': 'strict sequential single-process',
+            'stabilization': _stabilization_config(args),
         },
         'domains': domains,
         'stream_metrics': summarize_results(stream_results),
@@ -221,15 +301,17 @@ def main(args):
 
     datasets = args.test_sets.split('/')
     all_results = {}
+    result_tag = _result_tag(args)
     for set_id in datasets:
         result = run_dataset(args, set_id, device)
         all_results[set_id] = result
-        out_path = output_dir / f'{set_id}_{args.reset_mode}_sev{args.corruption_severity}.json'
+        out_path = output_dir / f'{set_id}_{result_tag}.json'
         with out_path.open('w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f'[INFO] CTTA result saved to {out_path}')
+        torch.cuda.empty_cache()
 
-    summary_path = output_dir / f'all_{args.reset_mode}_sev{args.corruption_severity}.json'
+    summary_path = output_dir / f'all_{result_tag}.json'
     with summary_path.open('w', encoding='utf-8') as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
     print(f'[INFO] Combined CTTA results saved to {summary_path}')
