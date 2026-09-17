@@ -22,12 +22,16 @@ def needs_source_model(args) -> bool:
         or args.loss_prompt_feat_cons
         or args.loss_cmac
         or args.module_safs
-        or args.loss_div
     )
 
 
+def needs_ctta_loop(args) -> bool:
+    """Whether adaptation must use the extended CTTA loss loop."""
+    return bool(needs_source_model(args) or args.loss_div)
+
+
 def build_source_model(model, args):
-    """Create the frozen source anchor used by DAF-derived stabilizers."""
+    """Create the frozen source anchor used by source-anchored stabilizers."""
     if not needs_source_model(args):
         return None
 
@@ -89,7 +93,7 @@ def test_time_tuning_ctta(
     if optimizer is None:
         return []
     if needs_source_model(args) and source_model is None:
-        raise ValueError('A DAF-derived CTTA module was requested but no frozen source model was provided.')
+        raise ValueError('A source-anchored CTTA module was requested but no frozen source model was provided.')
     if args.module_safs and safs_gate is None:
         raise ValueError('SAFS was enabled but no temporal SAFS gate was provided.')
 
