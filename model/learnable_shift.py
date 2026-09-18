@@ -110,8 +110,11 @@ class TestTimeShiftTuning(nn.Module):
         self.ignore_residual = True   
         self.feature_up = True   
 
-        query_words, self.query_idx = get_cls_idx_multi_prom(args.name_path)
-        self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
+        query_words, query_idx = get_cls_idx_multi_prom(args.name_path)
+        # Keep a CPU copy for prompt grouping. query_idx maps every description
+        # prompt to its semantic class and is constant throughout evaluation.
+        self.query_idx_list = [int(idx) for idx in query_idx]
+        self.query_idx = torch.tensor(self.query_idx_list, dtype=torch.int64, device=device)
         query_features = []
         with torch.no_grad(): 
             for qw in query_words:
@@ -268,6 +271,104 @@ class TestTimeShiftTuning(nn.Module):
         
         return new_text_features
 
+    def _rsap_consensus_visual_mining(self, image_features_clip, prompt_features, topk=3, gamma=1.0):
+        """Build reliability-weighted class visual prototypes from multi-prompt consensus.
+
+        Each description slot produces an independent C-way class distribution.
+        Agreement is the mean probability across slots and disagreement is the
+        prompt-wise variance. Reliability is R = mean_prob * exp(-gamma * var).
+
+        Reliability is intentionally detached from the optimization graph: it is
+        an evidence-selection/gating statistic, not another quantity for entropy
+        minimization to manipulate.
+        """
+        if image_features_clip.ndim != 3 or image_features_clip.shape[0] != 1:
+            raise ValueError(
+                'RSAP-v1 currently expects one crop/image at a time, matching TMPA sliding inference.'
+            )
+
+        class_to_prompt_indices = [[] for _ in range(self.num_classes)]
+        for prompt_idx, class_idx in enumerate(self.query_idx_list):
+            if class_idx < 0 or class_idx >= self.num_classes:
+                raise ValueError(
+                    f'Prompt class index {class_idx} is outside [0, {self.num_classes - 1}].'
+                )
+            class_to_prompt_indices[class_idx].append(prompt_idx)
+
+        prompt_counts = [len(indices) for indices in class_to_prompt_indices]
+        if not prompt_counts or min(prompt_counts) < 2:
+            raise ValueError(
+                'RSAP-v1 requires at least two prompts for every class; '
+                f'got per-class counts {prompt_counts}.'
+            )
+
+        # Description slots need not be semantically aligned across classes; each
+        # slot is simply an independent linguistic view used to obtain one C-way
+        # prediction. Use the common number of available views for robustness to
+        # prompt files with unequal per-class counts.
+        num_views = min(prompt_counts)
+
+        with torch.no_grad():
+            visual_tokens = F.normalize(image_features_clip[0].detach(), dim=-1)
+            fixed_prompts = F.normalize(prompt_features.detach(), dim=-1)
+
+            per_view_probs = []
+            for view_idx in range(num_views):
+                prompt_indices = [
+                    class_to_prompt_indices[class_idx][view_idx]
+                    for class_idx in range(self.num_classes)
+                ]
+                class_prompts = fixed_prompts[prompt_indices]
+                view_logits = visual_tokens @ class_prompts.T
+                view_probs = F.softmax(view_logits.float() * float(self.logit_scale), dim=-1)
+                per_view_probs.append(view_probs)
+
+            prompt_probs = torch.stack(per_view_probs, dim=0)  # [K, N, C]
+            consensus = prompt_probs.mean(dim=0)                # [N, C]
+            disagreement = prompt_probs.var(dim=0, unbiased=False)
+            reliability = consensus * torch.exp(-float(gamma) * disagreement)
+
+            predicted_class = consensus.argmax(dim=-1)
+            class_visual_prototypes = []
+            class_reliability = []
+
+            for class_idx in range(self.num_classes):
+                class_mask = predicted_class == class_idx
+                num_candidates = int(class_mask.sum().item())
+
+                if num_candidates == 0:
+                    prototype = torch.zeros(
+                        visual_tokens.shape[-1],
+                        device=visual_tokens.device,
+                        dtype=visual_tokens.dtype,
+                    )
+                    reliability_score = reliability.new_zeros(())
+                else:
+                    k = min(int(topk), num_candidates)
+                    scores = reliability[:, class_idx].masked_fill(
+                        ~class_mask, torch.finfo(reliability.dtype).min
+                    )
+                    top_values, top_indices = torch.topk(scores, k=k, largest=True)
+                    weights = top_values.clamp_min(1e-8)
+                    selected_tokens = visual_tokens[top_indices].float()
+                    prototype = (
+                        selected_tokens * weights.unsqueeze(-1)
+                    ).sum(dim=0) / weights.sum()
+                    prototype = prototype.to(visual_tokens.dtype)
+                    reliability_score = weights.mean()
+
+                class_visual_prototypes.append(prototype)
+                class_reliability.append(reliability_score)
+
+            class_visual_prototypes = torch.stack(class_visual_prototypes, dim=0)
+            class_reliability = torch.stack(class_reliability, dim=0).clamp(0.0, 1.0)
+
+            prompt_class_idx = self.query_idx.to(class_visual_prototypes.device)
+            prompt_visual_prototypes = class_visual_prototypes[prompt_class_idx]
+            prompt_reliability = class_reliability[prompt_class_idx].unsqueeze(-1)
+
+        return prompt_visual_prototypes, prompt_reliability
+
     def forward_feature(self, img, image_name, args, logit_size=None):
         if type(img) == list:
             img = img[0]
@@ -291,35 +392,62 @@ class TestTimeShiftTuning(nn.Module):
             cls_logits = image_cls_token.to(device) @ self.text_features.T.to(device)  
 
         if args.text_adjust == 'True' and args.module_visual_guidance:
-            topk = 3
-            image_features_clip = image_features.clone() 
-            image_features_clip = image_features_clip / image_features_clip.norm(dim=-1, keepdim=True)
-            logits = image_features_clip @ self.text_features.T.to(device) 
-            B, N, D = image_features_clip.shape
-            C, Dq = self.text_features.shape
-            assert D == Dq
-            max_index_map = self.postprocess_entropy(topk, logits.permute(0, 2, 1).reshape(-1, C, 14, 14), image_name, img)
-            selected_features = []
-            for i, idx in enumerate(self.query_idx):  
-                max_indices = max_index_map[idx] 
-                if max_indices is not None and len(max_indices) > 0:
-                    feats = []
-                    for max_idx in max_indices:
-                        feat = image_features_clip[0, max_idx, :] 
-                        feats.append(feat)
-                    feat = torch.stack(feats, dim=0).mean(dim=0)  
-                else:
-                    feat = torch.zeros(image_features_clip.shape[2], device=image_features_clip.device, dtype=image_features_clip.dtype)
-                selected_features.append(feat)
-            selected_features = torch.stack(selected_features, dim=0) 
+            image_features_clip = F.normalize(image_features.clone(), dim=-1)
 
-            proj = torch.sum(selected_features.to(device) * image_cls_token, dim=-1, keepdim=True) 
-            proj = proj * image_cls_token  
+            if args.module_rsap_v1:
+                selected_features, prompt_reliability = self._rsap_consensus_visual_mining(
+                    image_features_clip,
+                    self.text_features,
+                    topk=args.rsap_topk,
+                    gamma=args.rsap_gamma,
+                )
+                # Reliability-gated semantic calibration:
+                # beta_q^t = alpha_q * R_{class(q)}^t.
+                # alpha remains TMPA's learnable per-prompt parameter while R is
+                # a detached, sample-dependent reliability estimate in [0, 1].
+                beta = self.alpha * prompt_reliability.to(
+                    device=self.alpha.device, dtype=self.alpha.dtype
+                )
+                updated_query_features = (
+                    (1 - beta) * self.text_features.to(device)
+                    + beta * selected_features.to(device)
+                ).to(self.text_features.dtype)
+            else:
+                topk = 3
+                logits = image_features_clip @ self.text_features.T.to(device)
+                B, N, D = image_features_clip.shape
+                C, Dq = self.text_features.shape
+                assert D == Dq
+                max_index_map = self.postprocess_entropy(
+                    topk,
+                    logits.permute(0, 2, 1).reshape(-1, C, 14, 14),
+                    image_name,
+                    img,
+                )
+                selected_features = []
+                for i, idx in enumerate(self.query_idx):
+                    max_indices = max_index_map[idx]
+                    if max_indices is not None and len(max_indices) > 0:
+                        feats = []
+                        for max_idx in max_indices:
+                            feat = image_features_clip[0, max_idx, :]
+                            feats.append(feat)
+                        feat = torch.stack(feats, dim=0).mean(dim=0)
+                    else:
+                        feat = torch.zeros(
+                            image_features_clip.shape[2],
+                            device=image_features_clip.device,
+                            dtype=image_features_clip.dtype,
+                        )
+                    selected_features.append(feat)
+                selected_features = torch.stack(selected_features, dim=0)
 
-            updated_query_features = (
-                (1 - self.alpha) * self.text_features.to(device) + self.alpha * (selected_features.to(device))
-            ).to(self.text_features.dtype)
-            updated_query_features = updated_query_features / updated_query_features.norm(dim=-1, keepdim=True)
+                updated_query_features = (
+                    (1 - self.alpha) * self.text_features.to(device)
+                    + self.alpha * selected_features.to(device)
+                ).to(self.text_features.dtype)
+
+            updated_query_features = F.normalize(updated_query_features, dim=-1)
 
 
         if self.feature_up:
