@@ -272,15 +272,18 @@ class TestTimeShiftTuning(nn.Module):
         return new_text_features
 
     def _rsap_consensus_visual_mining(self, image_features_clip, prompt_features, topk=3, gamma=1.0):
-        """Build reliability-weighted class visual prototypes from multi-prompt consensus.
+        """Build reliability-weighted visual prototypes from multi-prompt consensus.
 
-        Each description slot produces an independent C-way class distribution.
-        Agreement is the mean probability across slots and disagreement is the
-        prompt-wise variance. Reliability is R = mean_prob * exp(-gamma * var).
+        Prompt files can contain a different number of descriptions per class
+        (LoveDA is one example), so RSAP does not align the k-th prompt across
+        classes. Instead, for each class c and each of its prompts k, that prompt
+        replaces c in an otherwise class-mean prototype bank and yields an
+        independent C-way probability p_{i,c}^{(k)}. Consensus and disagreement
+        are then computed across all prompts belonging to c.
 
-        Reliability is intentionally detached from the optimization graph: it is
-        an evidence-selection/gating statistic, not another quantity for entropy
-        minimization to manipulate.
+        Reliability is detached from the optimization graph because it is an
+        evidence-selection/gating statistic rather than another target that
+        entropy minimization should be able to manipulate directly.
         """
         if image_features_clip.ndim != 3 or image_features_clip.shape[0] != 1:
             raise ValueError(
@@ -302,30 +305,39 @@ class TestTimeShiftTuning(nn.Module):
                 f'got per-class counts {prompt_counts}.'
             )
 
-        # Description slots need not be semantically aligned across classes; each
-        # slot is simply an independent linguistic view used to obtain one C-way
-        # prediction. Use the common number of available views for robustness to
-        # prompt files with unequal per-class counts.
-        num_views = min(prompt_counts)
-
         with torch.no_grad():
             visual_tokens = F.normalize(image_features_clip[0].detach(), dim=-1)
             fixed_prompts = F.normalize(prompt_features.detach(), dim=-1)
 
-            per_view_probs = []
-            for view_idx in range(num_views):
-                prompt_indices = [
-                    class_to_prompt_indices[class_idx][view_idx]
-                    for class_idx in range(self.num_classes)
-                ]
-                class_prompts = fixed_prompts[prompt_indices]
-                view_logits = visual_tokens @ class_prompts.T
-                view_probs = F.softmax(view_logits.float() * float(self.logit_scale), dim=-1)
-                per_view_probs.append(view_probs)
+            # Stable class references for the competing classes. The currently
+            # evaluated class is replaced by each of its prompts in turn.
+            class_mean_prompts = []
+            for prompt_indices in class_to_prompt_indices:
+                class_mean = fixed_prompts[prompt_indices].mean(dim=0)
+                class_mean_prompts.append(F.normalize(class_mean, dim=-1))
+            class_mean_prompts = torch.stack(class_mean_prompts, dim=0)
 
-            prompt_probs = torch.stack(per_view_probs, dim=0)  # [K, N, C]
-            consensus = prompt_probs.mean(dim=0)                # [N, C]
-            disagreement = prompt_probs.var(dim=0, unbiased=False)
+            class_consensus = []
+            class_disagreement = []
+            for class_idx, prompt_indices in enumerate(class_to_prompt_indices):
+                per_prompt_support = []
+                for prompt_idx in prompt_indices:
+                    class_bank = class_mean_prompts.clone()
+                    class_bank[class_idx] = fixed_prompts[prompt_idx]
+                    view_logits = visual_tokens @ class_bank.T
+                    view_probs = F.softmax(
+                        view_logits.float() * float(self.logit_scale), dim=-1
+                    )
+                    per_prompt_support.append(view_probs[:, class_idx])
+
+                prompt_support = torch.stack(per_prompt_support, dim=0)  # [K_c, N]
+                class_consensus.append(prompt_support.mean(dim=0))
+                class_disagreement.append(
+                    prompt_support.var(dim=0, unbiased=False)
+                )
+
+            consensus = torch.stack(class_consensus, dim=-1)      # [N, C]
+            disagreement = torch.stack(class_disagreement, dim=-1)
             reliability = consensus * torch.exp(-float(gamma) * disagreement)
 
             predicted_class = consensus.argmax(dim=-1)
