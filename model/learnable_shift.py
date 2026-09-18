@@ -404,7 +404,8 @@ class TestTimeShiftTuning(nn.Module):
             cls_logits = image_cls_token.to(device) @ self.text_features.T.to(device)  
 
         if args.text_adjust == 'True' and args.module_visual_guidance:
-            image_features_clip = F.normalize(image_features.clone(), dim=-1)
+            image_features_clip = image_features.clone()
+            image_features_clip = image_features_clip / image_features_clip.norm(dim=-1, keepdim=True)
 
             if args.module_rsap_v1:
                 selected_features, prompt_reliability = self._rsap_consensus_visual_mining(
@@ -459,7 +460,7 @@ class TestTimeShiftTuning(nn.Module):
                     + self.alpha * selected_features.to(device)
                 ).to(self.text_features.dtype)
 
-            updated_query_features = F.normalize(updated_query_features, dim=-1)
+            updated_query_features = updated_query_features / updated_query_features.norm(dim=-1, keepdim=True)
 
 
         if self.feature_up:
