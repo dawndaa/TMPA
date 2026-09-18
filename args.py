@@ -238,6 +238,31 @@ def parse_args():
     )
     parser.set_defaults(module_cat_prompt=True, module_visual_guidance=True)
 
+    # Reliability-aware Scene-Adaptive Prompting (RSAP-v1).
+    # v1 intentionally keeps TMPA's existing multi-prompt prediction aggregation
+    # and changes only visual evidence mining + text/visual fusion.
+    parser.add_argument(
+        '--module_rsap_v1',
+        action='store_true',
+        help=(
+            'Enable RSAP-v1 inside Visual Guidance: use multi-prompt consensus '
+            'to mine reliable visual prototypes and gate text/visual fusion by '
+            'class reliability. Disabled by default to preserve TMPA exactly.'
+        ),
+    )
+    parser.add_argument(
+        '--rsap_gamma',
+        type=float,
+        default=1.0,
+        help='Penalty strength for prompt disagreement in RSAP reliability.',
+    )
+    parser.add_argument(
+        '--rsap_topk',
+        type=int,
+        default=3,
+        help='Number of highest-reliability visual tokens per predicted class in RSAP-v1.',
+    )
+
     # TPS
     parser.add_argument('--img_aug', action="store_true")
     parser.add_argument('--with_concepts', action="store_true")
@@ -296,5 +321,17 @@ def parse_args():
     # optimizer remain untouched and keep following the original TTA controls.
     if not args.module_visual_guidance:
         args.text_adjust = False
+
+    if args.module_rsap_v1:
+        if not args.module_cat_prompt:
+            raise ValueError('--module_rsap_v1 requires Cat-Prompt / multiple prompts per class.')
+        if not args.module_visual_guidance:
+            raise ValueError('--module_rsap_v1 requires --module_visual_guidance.')
+        if args.text_adjust != 'True':
+            raise ValueError("--module_rsap_v1 requires --text_adjust True.")
+        if args.rsap_topk < 1:
+            raise ValueError('--rsap_topk must be >= 1.')
+        if args.rsap_gamma < 0:
+            raise ValueError('--rsap_gamma must be non-negative.')
 
     return args
