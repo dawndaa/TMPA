@@ -232,6 +232,16 @@ def _tmpa_module_config(args):
                 'text_shift, optimizer creation, tta_steps, or reset semantics.'
             ),
         },
+        'rsap_v1': {
+            'enabled': bool(args.module_rsap_v1),
+            'topk': args.rsap_topk,
+            'gamma': args.rsap_gamma,
+            'definition': (
+                'Reliability-aware Scene-Adaptive Prompting v1: multi-prompt consensus '
+                'visual mining plus sample/class-dependent reliability-gated fusion. '
+                'The original multi-prompt prediction aggregation is retained.'
+            ),
+        },
         'tta_update': {
             'text_shift': bool(args.text_shift),
             'do_shift': bool(args.do_shift),
@@ -300,6 +310,9 @@ def _result_tag(args):
         parts.append('nocatprompt')
     if not args.module_visual_guidance:
         parts.append('novisguide')
+    if args.module_rsap_v1:
+        gamma = f'{args.rsap_gamma:g}'.replace('.', 'p')
+        parts.append(f'rsapv1-k{args.rsap_topk}-g{gamma}')
     if args.loss_src_cons:
         parts.append(f'srccons{args.lamb_src_cons:g}'.replace('.', 'p'))
     if args.loss_prompt_feat_cons:
