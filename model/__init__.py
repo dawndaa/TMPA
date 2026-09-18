@@ -1,3 +1,3 @@
 from .clip import *
 
-DOWNLOAD_ROOT='checkpoints/clip'
+DOWNLOAD_ROOT='/data/ckpt'

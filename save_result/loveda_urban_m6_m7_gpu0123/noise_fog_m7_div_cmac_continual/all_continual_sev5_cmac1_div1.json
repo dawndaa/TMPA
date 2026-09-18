@@ -1,0 +1,122 @@
+{
+  "loveda": {
+    "dataset": "loveda",
+    "protocol": {
+      "reset_mode": "continual",
+      "corruptions": [
+        "gaussian_noise",
+        "fog"
+      ],
+      "corruption_severity": 5,
+      "tta_steps": 1,
+      "batch_size": 1,
+      "stream_semantics": "strict sequential single-process",
+      "stabilization": {
+        "source_consistency": {
+          "enabled": false,
+          "weight": 1.0,
+          "definition": "DAF-style symmetric KL against frozen source prediction"
+        },
+        "prompt_feature_consistency": {
+          "enabled": false,
+          "weight": 1.0,
+          "type": "cosine",
+          "definition": "TMPA prompt/text-space counterpart to DAF visual feature consistency; DAF visual feature consistency is not copied directly because TMPA freezes visual features"
+        },
+        "cmac": {
+          "enabled": true,
+          "weight": 1.0,
+          "definition": "DAF-style directional source anchoring mapped to TMPA pixel class probabilities: penalize moving away from the frozen-source assigned class or toward non-anchor classes"
+        },
+        "diversity": {
+          "enabled": true,
+          "weight": 1.0,
+          "definition": "DAF-style negative entropy of the marginal class distribution across pixels; minimization discourages collapse to a small set of predicted classes"
+        },
+        "safs": {
+          "enabled": false,
+          "alpha": 0.5,
+          "window": 32,
+          "warmup": 8,
+          "definition": "Streaming analogue of DAF SAFS for strict batch-size-one CTTA: gate optimizer updates using prediction drift against a frozen source anchor and a rolling mean - alpha * std threshold"
+        }
+      }
+    },
+    "domains": [
+      {
+        "index": 0,
+        "corruption": "gaussian_noise",
+        "num_samples": 677,
+        "metrics": {
+          "aAcc": 27.05,
+          "mIoU": 8.3,
+          "mAcc": 18.37
+        },
+        "adaptation_losses": {
+          "total": -1.145441053448963,
+          "base": 0.66753121043942,
+          "entropy": 0.66753121043942,
+          "source_consistency": 0.0,
+          "prompt_feature_consistency": 0.0,
+          "cmac": 0.043284534406538726,
+          "diversity": -1.8562567996485724,
+          "safs_keep": 1.0,
+          "safs_filter_rate": 0.0
+        }
+      },
+      {
+        "index": 1,
+        "corruption": "fog",
+        "num_samples": 677,
+        "metrics": {
+          "aAcc": 38.26,
+          "mIoU": 21.38,
+          "mAcc": 34.19
+        },
+        "adaptation_losses": {
+          "total": -1.1575126629460333,
+          "base": 0.6008561170347684,
+          "entropy": 0.6008561170347684,
+          "source_consistency": 0.0,
+          "prompt_feature_consistency": 0.0,
+          "cmac": 0.036216141445564995,
+          "diversity": -1.7945849212268958,
+          "safs_keep": 1.0,
+          "safs_filter_rate": 0.0
+        }
+      }
+    ],
+    "stream_metrics": {
+      "aAcc": 32.66,
+      "mIoU": 15.28,
+      "mAcc": 26.28
+    },
+    "stream_progress": {
+      "0.10": {
+        "aAcc": 25.63,
+        "mIoU": 9.36,
+        "mAcc": 19.55
+      },
+      "0.20": {
+        "aAcc": 27.32,
+        "mIoU": 9.35,
+        "mAcc": 19.37
+      },
+      "0.40": {
+        "aAcc": 26.64,
+        "mIoU": 8.59,
+        "mAcc": 18.73
+      },
+      "0.80": {
+        "aAcc": 31.31,
+        "mIoU": 13.89,
+        "mAcc": 24.59
+      },
+      "1.00": {
+        "aAcc": 32.66,
+        "mIoU": 15.28,
+        "mAcc": 26.28
+      }
+    }
+  }
+}

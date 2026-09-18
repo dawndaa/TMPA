@@ -6,6 +6,8 @@ __pycache__/
 *.pth
 *.png 
 *.jpg 
+!ctta/vendor/daf_imagecorruptions/frost/*.png
+!ctta/vendor/daf_imagecorruptions/frost/*.jpg
 *.pdf 
 *.out
 

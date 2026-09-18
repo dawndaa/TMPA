@@ -75,9 +75,6 @@ from torch.utils.data.distributed import DistributedSampler
 from run_utils import select_confident_samples,select_confident_samples_seg, avg_entropy, model_names, IMAGENET_VARIANTS, log_results, avg_entropy_seg, loss_prompt_logit,loss_prompt_entropy
 from args import parse_args
 
-from color import OpenEarthMap_PALETTE, potsdam_PALETTE, LoveDA_PALETTE, iSAID_PALETTE, uavid_PALETTE, udd5_PALETTE, vaihingen_PALETTE, vdd_PALETTE, road_PALETTE, water_PALETTE, building_PALETTE
-
-
 class ResizeKeepRatio(object):
     def __init__(self, long_size=448):
         self.long_size = long_size
