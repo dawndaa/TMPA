@@ -9,6 +9,7 @@ import torch
 from ctta.modules.cmac import cmac_source_anchor_loss
 from ctta.modules.consistency import (
     prompt_feature_consistency,
+    reliability_guided_source_consistency,
     source_prediction_consistency,
 )
 from ctta.modules.diversity import diversity_loss
@@ -19,6 +20,7 @@ from run_utils import avg_entropy_seg, loss_prompt_entropy
 def needs_source_model(args) -> bool:
     return bool(
         args.loss_src_cons
+        or args.loss_sdr
         or args.loss_prompt_feat_cons
         or args.loss_cmac
         or args.module_safs
@@ -103,7 +105,7 @@ def test_time_tuning_ctta(
     for _ in range(args.tta_steps):
         with torch.cuda.amp.autocast(enabled=autocast_enabled):
             source_prob_maps = None
-            if args.loss_src_cons or args.loss_cmac or args.module_safs:
+            if args.loss_src_cons or args.loss_sdr or args.loss_cmac or args.module_safs:
                 source_prob_maps = _forward_source(
                     source_model, image_name, inputs, ori_shape, args
                 )
@@ -116,6 +118,20 @@ def test_time_tuning_ctta(
             if args.loss_src_cons:
                 src_cons_loss = source_prediction_consistency(
                     seg_prob_maps, source_prob_maps
+                )
+
+            sdr_loss = base_loss.new_zeros(())
+            if args.loss_sdr:
+                reliability_map = getattr(model, 'last_rsap_reliability_map', None)
+                if reliability_map is None:
+                    raise RuntimeError(
+                        'SDR requires the RSAP reliability map from the adapted forward pass.'
+                    )
+                sdr_loss = reliability_guided_source_consistency(
+                    seg_prob_maps,
+                    source_prob_maps,
+                    reliability_map,
+                    min_weight=args.sdr_min_weight,
                 )
 
             prompt_cons_loss = base_loss.new_zeros(())
@@ -141,6 +157,7 @@ def test_time_tuning_ctta(
             total_loss = (
                 base_loss
                 + args.lamb_src_cons * src_cons_loss
+                + args.lamb_sdr * sdr_loss
                 + args.lamb_prompt_feat_cons * prompt_cons_loss
                 + args.lamb_cmac * cmac_loss
                 + args.lamb_div * div_loss
@@ -173,6 +190,7 @@ def test_time_tuning_ctta(
             'entropy': float(loss_entropy.detach().item()),
             'prompt': None if loss_prompt is None else float(loss_prompt.detach().item()),
             'source_consistency': float(src_cons_loss.detach().item()),
+            'sdr': float(sdr_loss.detach().item()),
             'prompt_feature_consistency': float(prompt_cons_loss.detach().item()),
             'cmac': float(cmac_loss.detach().item()),
             'diversity': float(div_loss.detach().item()),
