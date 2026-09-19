@@ -81,3 +81,167 @@ M1/GSC run:
 
 The w_min=1.0 case is a regression control and should match the uniform GSC loss
 up to floating-point differences when the prediction paths are otherwise identical.
+
+
+## LoveDA Urban clean: exact ablation commands
+
+The following five runs correspond to the requested main-module ablation.
+They assume that `DATA_ROOT` is the same LoveDA root used by the existing
+LoveDA Urban clean experiment and resolves to the same 677 validation images.
+
+All clean adaptation runs use one `original` domain and `reset_mode=domain`
+to match the existing clean protocol. With one domain, parameters are retained
+across all 677 images. Use `reset_mode=continual` later for multi-corruption
+CTTA streams.
+
+Set once:
+
+```bash
+export DATA_ROOT=/path/to/data
+export GPU=0
+```
+
+Shared arguments for all runs:
+
+```text
+--test_sets loveda
+-a ViT-B/16
+-b 1
+--gpu <GPU>
+--resolution 448
+--lr 1e-4
+--tta_steps 1
+--num_classes 7
+--name_path ./configs/cls_loveda.txt
+--corruptions_list original
+--corruption_severity 5
+```
+
+### A0. SegEarth-OV Source
+
+No Cat-Prompt, no legacy Visual Guidance, and no test-time update.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --no_module_cat_prompt --no_module_visual_guidance \
+  --reset_mode source \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A0_source
+```
+
+### A1. SegEarth-OV Source + Text-shift
+
+No Cat-Prompt and no legacy Visual Guidance. Only the existing text-shift state
+is optimized and retained across the clean domain.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --no_module_cat_prompt --no_module_visual_guidance \
+  --text_shift --do_shift --per_label \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A1_textshift
+```
+
+### A2. SegEarth-OV Source + Text-shift + GSC
+
+This is the uniform GSC baseline. Use `--loss_src_cons`, not `--loss_sdr`.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --no_module_cat_prompt --no_module_visual_guidance \
+  --text_shift --do_shift --per_label \
+  --loss_src_cons --lamb_src_cons 1.0 \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A2_textshift_gsc
+```
+
+### A3. SegEarth-OV Source + Text-shift + RSAP
+
+RSAP uses Cat-Prompt as its multi-description semantic input and replaces legacy
+TMPA Visual Guidance. Therefore Cat-Prompt is explicitly enabled while legacy
+Visual Guidance is explicitly disabled.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --module_cat_prompt --no_module_visual_guidance \
+  --module_rsap_v1 --rsap_topk 3 --rsap_gamma 1.0 \
+  --text_adjust True \
+  --text_shift --do_shift --per_label \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A3_textshift_rsap
+```
+
+### A4. SegEarth-OV Source + Text-shift + RSAP + GSC
+
+This combines RSAP with the original uniform GSC. It is useful for separating
+the effect of RSAP from the later reliability-guided SDR modification.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --module_cat_prompt --no_module_visual_guidance \
+  --module_rsap_v1 --rsap_topk 3 --rsap_gamma 1.0 \
+  --text_adjust True \
+  --text_shift --do_shift --per_label \
+  --loss_src_cons --lamb_src_cons 1.0 \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A4_textshift_rsap_gsc
+```
+
+### A5. Optional but required if the paper uses the modified SDR as the final method
+
+A4 still uses uniform GSC. The proposed v2 SDR is the reliability-guided GSC.
+To evaluate the actual RSAP + SDR full method, replace `--loss_src_cons` with
+`--loss_sdr`:
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --module_cat_prompt --no_module_visual_guidance \
+  --module_rsap_v1 --rsap_topk 3 --rsap_gamma 1.0 \
+  --text_adjust True \
+  --text_shift --do_shift --per_label \
+  --loss_sdr --lamb_sdr 1.0 --sdr_min_weight 0.5 \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A5_textshift_rsap_sdr
+```
+
+Do not combine `--loss_src_cons` and `--loss_sdr`; SDR already contains GSC.
+
+### Interpretation caveat: Cat-Prompt control
+
+A0-A2 intentionally disable Cat-Prompt, whereas A3-A5 require Cat-Prompt because
+multi-prompt consensus is the input to RSAP. Therefore the difference A1 -> A3
+contains both the availability of multiple category descriptions and the new RSAP
+reliability mechanism.
+
+For a strict mechanism-level RSAP attribution, add one inexpensive control:
+
+```text
+Text-shift + Cat-Prompt, with --no_module_visual_guidance and without --module_rsap_v1
+```
+
+This control is not mandatory for the five-row main-module ablation, but it is
+recommended if space or reviewer scrutiny requires isolating the gain from RSAP
+beyond Cat-Prompt itself.
