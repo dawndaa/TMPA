@@ -127,6 +127,30 @@ def parse_args():
         help='Weight for source prediction consistency.',
     )
     parser.add_argument(
+        '--loss_sdr',
+        action='store_true',
+        help=(
+            'Enable reliability-guided semantic drift regulation (SDR): retain the '
+            'original symmetric-KL source consistency, but weight pixels using the '
+            'detached RSAP reliability map with a protected minimum anchor weight.'
+        ),
+    )
+    parser.add_argument(
+        '--lamb_sdr',
+        type=float,
+        default=1.0,
+        help='Weight for reliability-guided SDR / GSC.',
+    )
+    parser.add_argument(
+        '--sdr_min_weight',
+        type=float,
+        default=0.5,
+        help=(
+            'Minimum per-pixel source-consistency weight in SDR. 1.0 exactly recovers '
+            'uniform GSC; lower values allow reliable target evidence more plasticity.'
+        ),
+    )
+    parser.add_argument(
         '--loss_prompt_feat_cons',
         action='store_true',
         help=(
@@ -316,22 +340,31 @@ def parse_args():
     if not args.module_cat_prompt:
         args.name_path = _build_single_prompt_file(args.name_path)
 
-    # Visual Guidance is now independent from test-time optimization. Turning it
-    # off gates only TMPA's image-guided prompt adjustment; text_shift and the
-    # optimizer remain untouched and keep following the original TTA controls.
-    if not args.module_visual_guidance:
+    # Legacy Visual Guidance and RSAP are independent alternatives. Turning off
+    # legacy Visual Guidance disables text_adjust only when RSAP is also off.
+    # This lets RSAP replace Visual Guidance instead of being nested inside it.
+    if not args.module_visual_guidance and not args.module_rsap_v1:
         args.text_adjust = False
 
     if args.module_rsap_v1:
         if not args.module_cat_prompt:
             raise ValueError('--module_rsap_v1 requires Cat-Prompt / multiple prompts per class.')
-        if not args.module_visual_guidance:
-            raise ValueError('--module_rsap_v1 requires --module_visual_guidance.')
         if args.text_adjust != 'True':
             raise ValueError("--module_rsap_v1 requires --text_adjust True.")
         if args.rsap_topk < 1:
             raise ValueError('--rsap_topk must be >= 1.')
         if args.rsap_gamma < 0:
             raise ValueError('--rsap_gamma must be non-negative.')
+
+    if args.loss_sdr:
+        if not args.module_rsap_v1:
+            raise ValueError('--loss_sdr requires --module_rsap_v1 to provide reliability maps.')
+        if args.loss_src_cons:
+            raise ValueError(
+                '--loss_sdr already contains GSC; do not combine it with --loss_src_cons '
+                'or source consistency would be counted twice.'
+            )
+        if not 0.0 <= args.sdr_min_weight <= 1.0:
+            raise ValueError('--sdr_min_weight must be in [0, 1].')
 
     return args
