@@ -52,12 +52,14 @@ and cannot be directly manipulated by the entropy-minimization objective.
 For each class c, let R_c be the mean reliability of its selected visual tokens.
 For every prompt q belonging to class c:
 
-    beta_q = alpha_q * R_c
+    beta_q = clip(alpha_q * R_c, 0, 1)
 
     t_tilde_q = (1 - beta_q) * t_q + beta_q * v_c
 
-alpha_q remains the original TMPA learnable prompt-calibration parameter. The
-new R_c term is sample- and class-dependent.
+alpha_q remains the learnable prompt-calibration parameter, while R_c is
+sample- and class-dependent. Clipping beta_q to [0, 1] guarantees a valid
+interpolation coefficient even if continual optimization moves alpha_q outside
+the unit interval.
 
 ## Flags
 
