@@ -237,9 +237,9 @@ def _tmpa_module_config(args):
             'topk': args.rsap_topk,
             'gamma': args.rsap_gamma,
             'definition': (
-                'Reliability-aware Scene-Adaptive Prompting v1: multi-prompt consensus '
-                'visual mining plus sample/class-dependent reliability-gated fusion. '
-                'The original multi-prompt prediction aggregation is retained.'
+                'Reliability-aware Scene-Adaptive Prompting: frozen Cat-Prompt consensus '
+                'estimates target reliability, mines class visual prototypes, and gates '
+                'text/visual calibration independently of legacy Visual Guidance.'
             ),
         },
         'tta_update': {
@@ -263,6 +263,16 @@ def _stabilization_config(args):
             'enabled': bool(args.loss_src_cons),
             'weight': args.lamb_src_cons,
             'definition': 'DAF-style symmetric KL against frozen source prediction',
+        },
+        'sdr': {
+            'enabled': bool(args.loss_sdr),
+            'weight': args.lamb_sdr,
+            'min_pixel_weight': args.sdr_min_weight,
+            'definition': (
+                'Reliability-guided GSC: preserve symmetric-KL source consistency while '
+                'redistributing pixel weights as w_min + (1-w_min)*(1-r). The weighted '
+                'mean is normalized to keep the loss scale comparable to uniform GSC.'
+            ),
         },
         'prompt_feature_consistency': {
             'enabled': bool(args.loss_prompt_feat_cons),
@@ -315,6 +325,10 @@ def _result_tag(args):
         parts.append(f'rsapv1-k{args.rsap_topk}-g{gamma}')
     if args.loss_src_cons:
         parts.append(f'srccons{args.lamb_src_cons:g}'.replace('.', 'p'))
+    if args.loss_sdr:
+        weight = f'{args.lamb_sdr:g}'.replace('.', 'p')
+        floor = f'{args.sdr_min_weight:g}'.replace('.', 'p')
+        parts.append(f'sdr{weight}-wmin{floor}')
     if args.loss_prompt_feat_cons:
         weight = f'{args.lamb_prompt_feat_cons:g}'.replace('.', 'p')
         parts.append(f'pfeat-{args.prompt_feat_cons_type}-{weight}')
