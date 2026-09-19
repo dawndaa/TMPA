@@ -269,9 +269,9 @@ def parse_args():
         '--module_rsap_v1',
         action='store_true',
         help=(
-            'Enable RSAP-v1 inside Visual Guidance: use multi-prompt consensus '
-            'to mine reliable visual prototypes and gate text/visual fusion by '
-            'class reliability. Disabled by default to preserve TMPA exactly.'
+            'Enable RSAP-v1 as an alternative to legacy Visual Guidance: use frozen '
+            'multi-prompt consensus to mine reliable visual prototypes and gate '
+            'text/visual fusion by class reliability. Disabled by default.'
         ),
     )
     parser.add_argument(
