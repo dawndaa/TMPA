@@ -166,7 +166,26 @@ CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
   --ctta_result_dir save_result/rsap_sdr_v2/A2_textshift_gsc
 ```
 
-### A3. SegEarth-OV Source + Text-shift + RSAP
+### A3. SegEarth-OV Source + Text-shift + SDR
+
+This isolates the modified GSC without enabling RSAP prompt calibration.
+SDR still needs Cat-Prompt because multi-prompt consensus is the reliability
+estimator, but `--module_rsap_v1` remains off.
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
+  --test_sets loveda -a ViT-B/16 -b 1 --gpu 0 --resolution 448 \
+  --lr 1e-4 --tta_steps 1 --num_classes 7 \
+  --name_path ./configs/cls_loveda.txt \
+  --module_cat_prompt --no_module_visual_guidance \
+  --text_shift --do_shift --per_label \
+  --loss_sdr --lamb_sdr 1.0 --sdr_min_weight 0.5 \
+  --reset_mode domain \
+  --corruptions_list original --corruption_severity 5 \
+  --ctta_result_dir save_result/rsap_sdr_v2/A3_textshift_sdr
+```
+
+### A4. SegEarth-OV Source + Text-shift + RSAP
 
 RSAP uses Cat-Prompt as its multi-description semantic input and replaces legacy
 TMPA Visual Guidance. Therefore Cat-Prompt is explicitly enabled while legacy
@@ -183,10 +202,10 @@ CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
   --text_shift --do_shift --per_label \
   --reset_mode domain \
   --corruptions_list original --corruption_severity 5 \
-  --ctta_result_dir save_result/rsap_sdr_v2/A3_textshift_rsap
+  --ctta_result_dir save_result/rsap_sdr_v2/A4_textshift_rsap
 ```
 
-### A4. SegEarth-OV Source + Text-shift + RSAP + GSC
+### A5. SegEarth-OV Source + Text-shift + RSAP + GSC
 
 This combines RSAP with the original uniform GSC. It is useful for separating
 the effect of RSAP from the later reliability-guided SDR modification.
@@ -203,12 +222,12 @@ CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
   --loss_src_cons --lamb_src_cons 1.0 \
   --reset_mode domain \
   --corruptions_list original --corruption_severity 5 \
-  --ctta_result_dir save_result/rsap_sdr_v2/A4_textshift_rsap_gsc
+  --ctta_result_dir save_result/rsap_sdr_v2/A5_textshift_rsap_gsc
 ```
 
-### A5. Optional but required if the paper uses the modified SDR as the final method
+### A6. RSAP + SDR (full v2 method)
 
-A4 still uses uniform GSC. The proposed v2 SDR is the reliability-guided GSC.
+A5 still uses uniform GSC. The proposed v2 SDR is the reliability-guided GSC.
 To evaluate the actual RSAP + SDR full method, replace `--loss_src_cons` with
 `--loss_sdr`:
 
@@ -224,7 +243,7 @@ CUDA_VISIBLE_DEVICES=$GPU python ctta_eval_remote.py "$DATA_ROOT" \
   --loss_sdr --lamb_sdr 1.0 --sdr_min_weight 0.5 \
   --reset_mode domain \
   --corruptions_list original --corruption_severity 5 \
-  --ctta_result_dir save_result/rsap_sdr_v2/A5_textshift_rsap_sdr
+  --ctta_result_dir save_result/rsap_sdr_v2/A6_textshift_rsap_sdr
 ```
 
 Do not combine `--loss_src_cons` and `--loss_sdr`; SDR already contains GSC.
@@ -235,6 +254,18 @@ A0-A2 intentionally disable Cat-Prompt, whereas A3-A5 require Cat-Prompt because
 multi-prompt consensus is the input to RSAP. Therefore the difference A1 -> A3
 contains both the availability of multiple category descriptions and the new RSAP
 reliability mechanism.
+
+For strict mechanism-level attribution, note that standalone SDR also requires Cat-Prompt.
+Therefore A2 -> A3 changes both the prompt source (single prompt -> Cat-Prompt) and the GSC weighting.
+If exact isolation is needed, add these controls:
+
+```text
+Text-shift + Cat-Prompt
+Text-shift + Cat-Prompt + uniform GSC
+```
+
+Then compare Cat-Prompt + GSC against Cat-Prompt + SDR to isolate reliability-guided weighting,
+and Cat-Prompt against Cat-Prompt + RSAP to isolate RSAP calibration.
 
 For a strict mechanism-level RSAP attribution, add one inexpensive control:
 
