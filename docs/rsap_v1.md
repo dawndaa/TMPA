@@ -1,3 +1,7 @@
+> **v2 branch note:** On `feature/rsap-sdr-v2`, RSAP no longer requires legacy
+> `--module_visual_guidance`. Use `--module_rsap_v1 --no_module_visual_guidance --text_adjust True`.
+> For the current method and exact ablation commands, see `docs/rsap_sdr_v2.md`.
+
 # RSAP-v1: Reliability-aware Scene-Adaptive Prompting
 
 This branch adds an opt-in first version of Reliability-aware Scene-Adaptive
