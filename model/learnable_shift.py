@@ -408,16 +408,25 @@ class TestTimeShiftTuning(nn.Module):
 
             cls_logits = image_cls_token.to(device) @ self.text_features.T.to(device)  
 
-        if args.text_adjust == 'True' and (args.module_rsap_v1 or args.module_visual_guidance):
-            image_features_clip = image_features.clone()
-            image_features_clip = image_features_clip / image_features_clip.norm(dim=-1, keepdim=True)
+        needs_reliability = bool(args.module_rsap_v1 or args.loss_sdr)
+        needs_prompt_adjustment = (
+            args.text_adjust == 'True'
+            and (args.module_rsap_v1 or args.module_visual_guidance)
+        )
+        if needs_reliability or needs_prompt_adjustment:
+            image_features_clip = F.normalize(image_features.clone(), dim=-1)
 
-            if args.module_rsap_v1:
-                selected_features, prompt_reliability, token_reliability = self._rsap_consensus_visual_mining(
+            selected_features = None
+            prompt_reliability = None
+            if needs_reliability:
+                (
+                    selected_features,
+                    prompt_reliability,
+                    token_reliability,
+                ) = self._rsap_consensus_visual_mining(
                     image_features_clip,
-                    # Estimate reliability against frozen Cat-Prompt semantics rather
-                    # than the continually shifted prompt state, preventing a
-                    # self-reinforcing reliability loop.
+                    # Shared reliability estimator for both RSAP and standalone SDR.
+                    # Frozen Cat-Prompt semantics avoid a self-reinforcing loop.
                     self.query_features.to(device),
                     topk=args.rsap_topk,
                     gamma=args.rsap_gamma,
@@ -427,10 +436,12 @@ class TestTimeShiftTuning(nn.Module):
                 expected_tokens = feature_w * feature_h
                 if token_reliability.numel() != expected_tokens:
                     raise ValueError(
-                        'RSAP reliability token count does not match the visual grid: '
+                        'Reliability token count does not match the visual grid: '
                         f'{token_reliability.numel()} vs {feature_w}x{feature_h}.'
                     )
-                rsap_reliability_map = token_reliability.view(1, 1, feature_w, feature_h)
+                rsap_reliability_map = token_reliability.view(
+                    1, 1, feature_w, feature_h
+                )
                 rsap_reliability_map = F.interpolate(
                     rsap_reliability_map.float(),
                     size=img.shape[-2:],
@@ -438,12 +449,9 @@ class TestTimeShiftTuning(nn.Module):
                     align_corners=False,
                 ).clamp(0.0, 1.0)
 
-                # Reliability-gated semantic calibration:
-                # beta_q^t = clip(alpha_q * R_{class(q)}^t, 0, 1).
-                # alpha remains a learnable per-prompt parameter while R is a
-                # detached, sample-dependent reliability estimate in [0, 1].
-                # Clamping keeps the interpolation coefficient physically valid
-                # even if continual optimization moves alpha outside [0, 1].
+            if args.module_rsap_v1:
+                # RSAP calibration path: use the same reliability estimate to
+                # gate how strongly target visual prototypes calibrate prompts.
                 beta = (
                     self.alpha
                     * prompt_reliability.to(
@@ -454,7 +462,12 @@ class TestTimeShiftTuning(nn.Module):
                     (1 - beta) * self.text_features.to(device)
                     + beta * selected_features.to(device)
                 ).to(self.text_features.dtype)
-            else:
+                updated_query_features = F.normalize(
+                    updated_query_features, dim=-1
+                )
+            elif needs_prompt_adjustment and args.module_visual_guidance:
+                # Legacy TMPA Visual Guidance path. Standalone SDR does not enter
+                # this branch when --no_module_visual_guidance is used.
                 topk = 3
                 logits = image_features_clip @ self.text_features.T.to(device)
                 B, N, D = image_features_clip.shape
@@ -483,13 +496,13 @@ class TestTimeShiftTuning(nn.Module):
                         )
                     selected_features.append(feat)
                 selected_features = torch.stack(selected_features, dim=0)
-
                 updated_query_features = (
                     (1 - self.alpha) * self.text_features.to(device)
                     + self.alpha * selected_features.to(device)
                 ).to(self.text_features.dtype)
-
-            updated_query_features = updated_query_features / updated_query_features.norm(dim=-1, keepdim=True)
+                updated_query_features = F.normalize(
+                    updated_query_features, dim=-1
+                )
 
 
         if self.feature_up:
@@ -555,7 +568,7 @@ class TestTimeShiftTuning(nn.Module):
         count_mat = img.new_zeros((img.shape[0], 1, h_img, w_img))
         reliability_assem = None
         self.last_rsap_reliability_map = None
-        if args.module_rsap_v1:
+        if args.module_rsap_v1 or args.loss_sdr:
             reliability_assem = torch.zeros(
                 (batch_size, 1, h_img, w_img),
                 device=device,
@@ -605,7 +618,9 @@ class TestTimeShiftTuning(nn.Module):
                                             int(preds.shape[-2] - y2)))  
                 if reliability_assem is not None:
                     if crop_reliability is None:
-                        raise RuntimeError('RSAP is enabled but forward_feature returned no reliability map.')
+                        raise RuntimeError(
+                            'Reliability-guided path is enabled but forward_feature returned no reliability map.'
+                        )
                     reliability_assem += nn.functional.pad(
                         crop_reliability.float(),
                         (int(x1), int(preds.shape[-1] - x2), int(y1),
