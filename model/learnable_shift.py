@@ -130,6 +130,7 @@ class TestTimeShiftTuning(nn.Module):
         num_queries = len(self.query_idx)   
         self.alpha = nn.Parameter(torch.full((num_queries, 1), self.alpha_init, device=device, dtype=self.dtype))    
 
+        self.last_rsap_reliability_map = None
         if self.feature_up:   
             self.feat_dim = self.embed_dim 
             self.upsampler = get_upsampler('jbu_one', self.feat_dim).cuda().half()
@@ -378,8 +379,11 @@ class TestTimeShiftTuning(nn.Module):
             prompt_class_idx = self.query_idx.to(class_visual_prototypes.device)
             prompt_visual_prototypes = class_visual_prototypes[prompt_class_idx]
             prompt_reliability = class_reliability[prompt_class_idx].unsqueeze(-1)
+            token_reliability = reliability.gather(
+                1, predicted_class.unsqueeze(-1)
+            ).squeeze(-1).clamp(0.0, 1.0)
 
-        return prompt_visual_prototypes, prompt_reliability
+        return prompt_visual_prototypes, prompt_reliability, token_reliability
 
     def forward_feature(self, img, image_name, args, logit_size=None):
         if type(img) == list:
@@ -390,6 +394,7 @@ class TestTimeShiftTuning(nn.Module):
         self.text_features = self.text_features.to(self.device)    
 
         self.output_cls_token = True
+        rsap_reliability_map = None
 
         image_features = self.net.encode_image(img, self.ignore_residual, self.output_cls_token)  
 
@@ -403,17 +408,36 @@ class TestTimeShiftTuning(nn.Module):
 
             cls_logits = image_cls_token.to(device) @ self.text_features.T.to(device)  
 
-        if args.text_adjust == 'True' and args.module_visual_guidance:
+        if args.text_adjust == 'True' and (args.module_rsap_v1 or args.module_visual_guidance):
             image_features_clip = image_features.clone()
             image_features_clip = image_features_clip / image_features_clip.norm(dim=-1, keepdim=True)
 
             if args.module_rsap_v1:
-                selected_features, prompt_reliability = self._rsap_consensus_visual_mining(
+                selected_features, prompt_reliability, token_reliability = self._rsap_consensus_visual_mining(
                     image_features_clip,
-                    self.text_features,
+                    # Estimate reliability against frozen Cat-Prompt semantics rather
+                    # than the continually shifted prompt state, preventing a
+                    # self-reinforcing reliability loop.
+                    self.query_features.to(device),
                     topk=args.rsap_topk,
                     gamma=args.rsap_gamma,
                 )
+                feature_w = img[0].shape[-2] // self.patch_size[0]
+                feature_h = img[0].shape[-1] // self.patch_size[1]
+                expected_tokens = feature_w * feature_h
+                if token_reliability.numel() != expected_tokens:
+                    raise ValueError(
+                        'RSAP reliability token count does not match the visual grid: '
+                        f'{token_reliability.numel()} vs {feature_w}x{feature_h}.'
+                    )
+                rsap_reliability_map = token_reliability.view(1, 1, feature_w, feature_h)
+                rsap_reliability_map = F.interpolate(
+                    rsap_reliability_map.float(),
+                    size=img.shape[-2:],
+                    mode='bilinear',
+                    align_corners=False,
+                ).clamp(0.0, 1.0)
+
                 # Reliability-gated semantic calibration:
                 # beta_q^t = clip(alpha_q * R_{class(q)}^t, 0, 1).
                 # alpha remains a learnable per-prompt parameter while R is a
@@ -477,7 +501,7 @@ class TestTimeShiftTuning(nn.Module):
             image_features = image_features.view(-1, self.feat_dim, image_w * image_h).permute(0, 2, 1)  
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
-        if args.text_adjust == 'True' and args.module_visual_guidance:
+        if args.text_adjust == 'True' and (args.module_rsap_v1 or args.module_visual_guidance):
             logits = image_features.to(device) @ updated_query_features.T.to(device)  
         else:
             logits = image_features.to(device) @ self.text_features.T.to(device)  
@@ -498,7 +522,11 @@ class TestTimeShiftTuning(nn.Module):
         else:
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
 
-        return logits, image_features.permute(0, 2, 1).contiguous().view(-1, self.feat_dim, image_w, image_h)   
+        return (
+            logits,
+            image_features.permute(0, 2, 1).contiguous().view(-1, self.feat_dim, image_w, image_h),
+            rsap_reliability_map,
+        )
     
     
     def forward_slide(self, img, ori_shape, image_name,args, stride=112, crop_size=224):
@@ -525,6 +553,14 @@ class TestTimeShiftTuning(nn.Module):
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img)).to(device)  
         image_feature_assem = img.new_zeros((img.shape[0], 512, h_img, w_img)).to(device)  
         count_mat = img.new_zeros((img.shape[0], 1, h_img, w_img))
+        reliability_assem = None
+        self.last_rsap_reliability_map = None
+        if args.module_rsap_v1:
+            reliability_assem = torch.zeros(
+                (batch_size, 1, h_img, w_img),
+                device=device,
+                dtype=torch.float32,
+            )
         self.i=0
         self.j=0
         for h_idx in range(h_grids):
@@ -547,7 +583,9 @@ class TestTimeShiftTuning(nn.Module):
                 if any(pad):
                     crop_img = nn.functional.pad(crop_img, pad)
 
-                crop_seg_logit, image_features_featup = self.forward_feature(crop_img,image_name, args)
+                crop_seg_logit, image_features_featup, crop_reliability = self.forward_feature(
+                    crop_img, image_name, args
+                )
                 logit_patch = crop_seg_logit  
                 logit_patch = logit_patch.mean(1)  
 
@@ -555,6 +593,8 @@ class TestTimeShiftTuning(nn.Module):
                     l, t = pad[0], pad[2]
                     crop_seg_logit = crop_seg_logit[:, :, t:t + H, l:l + W]  
                     image_features_featup = image_features_featup[:, :, t:t + H, l:l + W]   
+                    if crop_reliability is not None:
+                        crop_reliability = crop_reliability[:, :, t:t + H, l:l + W]
 
                 preds += nn.functional.pad(crop_seg_logit,
                                            (int(x1), int(preds.shape[-1] - x2), int(y1),
@@ -563,6 +603,14 @@ class TestTimeShiftTuning(nn.Module):
                 image_feature_assem += nn.functional.pad(image_features_featup,
                                            (int(x1), int(preds.shape[-1] - x2), int(y1),
                                             int(preds.shape[-2] - y2)))  
+                if reliability_assem is not None:
+                    if crop_reliability is None:
+                        raise RuntimeError('RSAP is enabled but forward_feature returned no reliability map.')
+                    reliability_assem += nn.functional.pad(
+                        crop_reliability.float(),
+                        (int(x1), int(preds.shape[-1] - x2), int(y1),
+                         int(preds.shape[-2] - y2)),
+                    )
                 
                 
                 count_mat[ :, :, y1:y2, x1:x2] += 1 
@@ -570,9 +618,20 @@ class TestTimeShiftTuning(nn.Module):
 
         preds = preds.to(self.device) / count_mat.to(self.device)
         image_feature_assem = image_feature_assem.to(self.device) / count_mat.squeeze(1).to(self.device)   
+        if reliability_assem is not None:
+            reliability_assem = reliability_assem / count_mat.float().clamp_min(1.0)
 
         W_out, H_out = ori_shape
         logits = nn.functional.interpolate(preds, size=(H_out, W_out), mode='bilinear')
+        if reliability_assem is not None:
+            full_reliability = F.interpolate(
+                reliability_assem,
+                size=(H_out, W_out),
+                mode='bilinear',
+                align_corners=False,
+            ).clamp(0.0, 1.0)
+            # Strict CTTA uses batch size 1; SDR consumes a detached [H, W] map.
+            self.last_rsap_reliability_map = full_reliability[0, 0].detach()
 
         if args.loss_prompt == 'True':
             pred_mask, pred_logit, all_seg_logits = self.postprocess_result(logits.to(logit_patch.device), image_name,args)
