@@ -36,7 +36,7 @@ and changes only its pixel weighting:
 
     L_SDR = sum_i w_i d_i / sum_i w_i
 
-where r_i is the detached RSAP reliability map.
+where r_i is the detached shared multi-prompt reliability map. The same estimator can be used by SDR alone or jointly with RSAP calibration.
 
 Properties:
 
