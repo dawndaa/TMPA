@@ -125,7 +125,7 @@ def test_time_tuning_ctta(
                 reliability_map = getattr(model, 'last_rsap_reliability_map', None)
                 if reliability_map is None:
                     raise RuntimeError(
-                        'SDR requires the RSAP reliability map from the adapted forward pass.'
+                        'SDR requires the shared multi-prompt reliability map from the adapted forward pass.'
                     )
                 sdr_loss = reliability_guided_source_consistency(
                     seg_prob_maps,
