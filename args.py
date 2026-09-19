@@ -131,8 +131,9 @@ def parse_args():
         action='store_true',
         help=(
             'Enable reliability-guided semantic drift regulation (SDR): retain the '
-            'original symmetric-KL source consistency, but weight pixels using the '
-            'detached RSAP reliability map with a protected minimum anchor weight.'
+            'original symmetric-KL source consistency, but weight pixels using a '
+            'detached multi-prompt reliability map with a protected minimum anchor weight. '
+            'This can be ablated independently from RSAP calibration.'
         ),
     )
     parser.add_argument(
@@ -357,13 +358,19 @@ def parse_args():
             raise ValueError('--rsap_gamma must be non-negative.')
 
     if args.loss_sdr:
-        if not args.module_rsap_v1:
-            raise ValueError('--loss_sdr requires --module_rsap_v1 to provide reliability maps.')
+        if not args.module_cat_prompt:
+            raise ValueError(
+                '--loss_sdr requires Cat-Prompt / multiple prompts per class to estimate reliability.'
+            )
         if args.loss_src_cons:
             raise ValueError(
                 '--loss_sdr already contains GSC; do not combine it with --loss_src_cons '
                 'or source consistency would be counted twice.'
             )
+        if args.rsap_gamma < 0:
+            raise ValueError('--rsap_gamma must be non-negative.')
+        if args.rsap_topk < 1:
+            raise ValueError('--rsap_topk must be >= 1.')
         if not 0.0 <= args.sdr_min_weight <= 1.0:
             raise ValueError('--sdr_min_weight must be in [0, 1].')
 
