@@ -415,12 +415,17 @@ class TestTimeShiftTuning(nn.Module):
                     gamma=args.rsap_gamma,
                 )
                 # Reliability-gated semantic calibration:
-                # beta_q^t = alpha_q * R_{class(q)}^t.
-                # alpha remains TMPA's learnable per-prompt parameter while R is
-                # a detached, sample-dependent reliability estimate in [0, 1].
-                beta = self.alpha * prompt_reliability.to(
-                    device=self.alpha.device, dtype=self.alpha.dtype
-                )
+                # beta_q^t = clip(alpha_q * R_{class(q)}^t, 0, 1).
+                # alpha remains a learnable per-prompt parameter while R is a
+                # detached, sample-dependent reliability estimate in [0, 1].
+                # Clamping keeps the interpolation coefficient physically valid
+                # even if continual optimization moves alpha outside [0, 1].
+                beta = (
+                    self.alpha
+                    * prompt_reliability.to(
+                        device=self.alpha.device, dtype=self.alpha.dtype
+                    )
+                ).clamp(0.0, 1.0)
                 updated_query_features = (
                     (1 - beta) * self.text_features.to(device)
                     + beta * selected_features.to(device)
