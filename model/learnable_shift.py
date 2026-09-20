@@ -70,10 +70,8 @@ class TestTimeShiftTuning(nn.Module):
                         args = None
                     ):
         super(TestTimeShiftTuning, self).__init__()
-        clip, self.embed_dim, _ = load(arch, device=device, download_root=DOWNLOAD_ROOT)
 
         self.arch = arch
-        self.clip = clip
         self.device = device
         self.batch_size = batch_size
 
@@ -101,6 +99,7 @@ class TestTimeShiftTuning(nn.Module):
         self.use_susx_feats = use_susx_feats
         
         self.net = create_model('ViT-B/16', pretrained='openai', cache_dir=DOWNLOAD_ROOT)
+        self.embed_dim = self.net.text_projection.shape[1]
 
         self.net.eval().to(device) 
         self.tokenizer = tokenizer.tokenize 
