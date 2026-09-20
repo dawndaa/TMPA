@@ -104,11 +104,20 @@ def _build_model_and_optimizer(args, classnames, device):
     model = get_shift_model(args, classnames).to(device)
     model.eval()
 
+    # RSAP/SDR adapts only prompt-side parameters and alpha. Freeze the full
+    # model before the first forward so the visual backbone/upsampler never
+    # build a backward graph on high-resolution samples.
+    model.requires_grad_(False)
+
     trainable_param = []
     if args.text_shift:
+        model.text_shifter.requires_grad_(True)
         trainable_param.extend(model.text_shifter.parameters())
         if hasattr(model, 'text_shifter_visual'):
+            model.text_shifter_visual.requires_grad_(True)
             trainable_param.extend(model.text_shifter_visual.parameters())
+
+    model.alpha.requires_grad_(True)
 
     optimizer = None
     if args.tta_steps > 0:
