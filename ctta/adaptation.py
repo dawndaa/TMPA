@@ -178,7 +178,7 @@ def test_time_tuning_ctta(
         did_update = bool(safs_info['keep'])
         if did_update and total_loss.requires_grad and any(p.requires_grad for p in model.parameters()):
             optimizer.zero_grad()
-            scaler.scale(total_loss).backward(retain_graph=True)
+            scaler.scale(total_loss).backward()
             scaler.step(optimizer)
             scaler.update()
         else:
