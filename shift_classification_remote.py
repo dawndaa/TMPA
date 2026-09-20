@@ -162,7 +162,7 @@ def test_time_tuning(image_name, model, inputs, ori_shape, optimizer, scaler, ar
             loss, pred = run_shift_iter_seg(model, inputs, ori_shape, image_name, args) 
         if loss.requires_grad and any(p.requires_grad for p in model.parameters()):
             optimizer.zero_grad()
-            scaler.scale(loss).backward(retain_graph=True)
+            scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
     return pred
