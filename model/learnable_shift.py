@@ -377,7 +377,6 @@ class TestTimeShiftTuning(nn.Module):
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img)).to(device)  
-        image_feature_assem = img.new_zeros((img.shape[0], 512, h_img, w_img)).to(device)  
         count_mat = img.new_zeros((img.shape[0], 1, h_img, w_img))
         self.i=0
         self.j=0
@@ -401,29 +400,22 @@ class TestTimeShiftTuning(nn.Module):
                 if any(pad):
                     crop_img = nn.functional.pad(crop_img, pad)
 
-                crop_seg_logit, image_features_featup = self.forward_feature(crop_img,image_name, args)
+                crop_seg_logit, _ = self.forward_feature(crop_img,image_name, args)
                 logit_patch = crop_seg_logit  
                 logit_patch = logit_patch.mean(1)  
 
                 if any(pad):
                     l, t = pad[0], pad[2]
                     crop_seg_logit = crop_seg_logit[:, :, t:t + H, l:l + W]  
-                    image_features_featup = image_features_featup[:, :, t:t + H, l:l + W]   
 
                 preds += nn.functional.pad(crop_seg_logit,
                                            (int(x1), int(preds.shape[-1] - x2), int(y1),
                                             int(preds.shape[-2] - y2)))
-
-                image_feature_assem += nn.functional.pad(image_features_featup,
-                                           (int(x1), int(preds.shape[-1] - x2), int(y1),
-                                            int(preds.shape[-2] - y2)))  
-                
                 
                 count_mat[ :, :, y1:y2, x1:x2] += 1 
         assert (count_mat == 0).sum() == 0
 
         preds = preds.to(self.device) / count_mat.to(self.device)
-        image_feature_assem = image_feature_assem.to(self.device) / count_mat.squeeze(1).to(self.device)   
 
         W_out, H_out = ori_shape
         logits = nn.functional.interpolate(preds, size=(H_out, W_out), mode='bilinear')
@@ -466,12 +458,20 @@ class TestTimeShiftTuning(nn.Module):
 
             
             if num_cls != num_queries:
-                seg_logits = seg_logits.unsqueeze(0)  
-                cls_index = nn.functional.one_hot(self.query_idx)  
-                cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)  
-
-                masked = seg_logits * cls_index.to(seg_logits.device)
-                seg_logits = self.logit_weight * masked.max(1)[0] + (1 - self.logit_weight) * masked.sum(1) / cls_index.sum(1).clamp(min=1).to(masked.device)
+                # Aggregate only the prompts belonging to each class instead of
+                # materializing a [num_cls, num_queries, H, W] masked tensor.
+                # This is mathematically equivalent to the original reduction
+                # but avoids a very large temporary allocation on UAVid.
+                class_prob_maps = []
+                for cls_id in range(num_cls):
+                    cls_mask = self.query_idx == cls_id
+                    cls_probs = seg_logits[cls_mask]
+                    cls_prob = (
+                        self.logit_weight * cls_probs.max(dim=0).values
+                        + (1 - self.logit_weight) * cls_probs.mean(dim=0)
+                    )
+                    class_prob_maps.append(cls_prob)
+                seg_logits = torch.stack(class_prob_maps, dim=0)
 
             seg_pred = seg_logits.argmax(0, keepdim=True)  
 
