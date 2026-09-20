@@ -113,6 +113,26 @@ def parse_args():
         default='save_result/ctta',
         help='Directory for CTTA JSON result files.',
     )
+    parser.add_argument(
+        '--save_vis',
+        action='store_true',
+        help=(
+            'Save interval-sampled qualitative outputs: clean/corrupted input, '
+            'GT, prediction, and RSAP reliability when available.'
+        ),
+    )
+    parser.add_argument(
+        '--vis_interval',
+        type=int,
+        default=48,
+        help='Save one qualitative sample every N images when --save_vis is enabled.',
+    )
+    parser.add_argument(
+        '--vis_dir',
+        type=str,
+        default='visualizations',
+        help='Root directory for qualitative CTTA outputs.',
+    )
 
     # Phase-2 DAF-derived stabilization modules
     parser.add_argument(
@@ -373,5 +393,8 @@ def parse_args():
             raise ValueError('--rsap_topk must be >= 1.')
         if not 0.0 <= args.sdr_min_weight <= 1.0:
             raise ValueError('--sdr_min_weight must be in [0, 1].')
+
+    if args.save_vis and args.vis_interval <= 0:
+        raise ValueError('--vis_interval must be > 0 when --save_vis is enabled.')
 
     return args
