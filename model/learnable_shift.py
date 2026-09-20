@@ -70,10 +70,8 @@ class TestTimeShiftTuning(nn.Module):
                         args = None
                     ):
         super(TestTimeShiftTuning, self).__init__()
-        clip, self.embed_dim, _ = load(arch, device=device, download_root=DOWNLOAD_ROOT)
 
         self.arch = arch
-        self.clip = clip
         self.device = device
         self.batch_size = batch_size
 
@@ -101,6 +99,7 @@ class TestTimeShiftTuning(nn.Module):
         self.use_susx_feats = use_susx_feats
         
         self.net = create_model('ViT-B/16', pretrained='openai', cache_dir=DOWNLOAD_ROOT)
+        self.embed_dim = self.net.text_projection.shape[1]
 
         self.net.eval().to(device) 
         self.tokenizer = tokenizer.tokenize 
@@ -564,7 +563,6 @@ class TestTimeShiftTuning(nn.Module):
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img)).to(device)  
-        image_feature_assem = img.new_zeros((img.shape[0], 512, h_img, w_img)).to(device)  
         count_mat = img.new_zeros((img.shape[0], 1, h_img, w_img))
         reliability_assem = None
         self.last_rsap_reliability_map = None
@@ -605,7 +603,6 @@ class TestTimeShiftTuning(nn.Module):
                 if any(pad):
                     l, t = pad[0], pad[2]
                     crop_seg_logit = crop_seg_logit[:, :, t:t + H, l:l + W]  
-                    image_features_featup = image_features_featup[:, :, t:t + H, l:l + W]   
                     if crop_reliability is not None:
                         crop_reliability = crop_reliability[:, :, t:t + H, l:l + W]
 
@@ -613,9 +610,6 @@ class TestTimeShiftTuning(nn.Module):
                                            (int(x1), int(preds.shape[-1] - x2), int(y1),
                                             int(preds.shape[-2] - y2)))
 
-                image_feature_assem += nn.functional.pad(image_features_featup,
-                                           (int(x1), int(preds.shape[-1] - x2), int(y1),
-                                            int(preds.shape[-2] - y2)))  
                 if reliability_assem is not None:
                     if crop_reliability is None:
                         raise RuntimeError(
@@ -632,7 +626,6 @@ class TestTimeShiftTuning(nn.Module):
         assert (count_mat == 0).sum() == 0
 
         preds = preds.to(self.device) / count_mat.to(self.device)
-        image_feature_assem = image_feature_assem.to(self.device) / count_mat.squeeze(1).to(self.device)   
         if reliability_assem is not None:
             reliability_assem = reliability_assem / count_mat.float().clamp_min(1.0)
 
@@ -686,12 +679,20 @@ class TestTimeShiftTuning(nn.Module):
 
             
             if num_cls != num_queries:
-                seg_logits = seg_logits.unsqueeze(0)  
-                cls_index = nn.functional.one_hot(self.query_idx)  
-                cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)  
-
-                masked = seg_logits * cls_index.to(seg_logits.device)
-                seg_logits = self.logit_weight * masked.max(1)[0] + (1 - self.logit_weight) * masked.sum(1) / cls_index.sum(1).clamp(min=1).to(masked.device)
+                # Aggregate only the prompts belonging to each class instead of
+                # materializing a [num_cls, num_queries, H, W] masked tensor.
+                # This preserves the original max/mean reduction exactly while
+                # avoiding a large full-resolution temporary allocation.
+                class_prob_maps = []
+                for cls_id in range(num_cls):
+                    cls_mask = self.query_idx == cls_id
+                    cls_probs = seg_logits[cls_mask]
+                    cls_prob = (
+                        self.logit_weight * cls_probs.max(dim=0).values
+                        + (1 - self.logit_weight) * cls_probs.mean(dim=0)
+                    )
+                    class_prob_maps.append(cls_prob)
+                seg_logits = torch.stack(class_prob_maps, dim=0)
 
             seg_pred = seg_logits.argmax(0, keepdim=True)  
 
@@ -711,12 +712,16 @@ class TestTimeShiftTuning(nn.Module):
 
             num_cls, num_queries = max(self.query_idx) + 1, len(self.query_idx)
             if num_cls != num_queries:
-                seg_logits = seg_logits.unsqueeze(0)   #torch.Size([1, cls_num*descrip, w_ori, h_ori])
-                cls_index = nn.functional.one_hot(self.query_idx)    #[cls_num*descrip, cls_num]
-                cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)   #torch.Size([cls_num, cls_num*descrip, 1, 1])
-
-                masked = seg_logits * cls_index.to(seg_logits.device)
-                seg_logits = self.logit_weight * masked.max(1)[0] + (1 - self.logit_weight) * masked.sum(1) / cls_index.sum(1).clamp(min=1).to(masked.device)
+                class_prob_maps = []
+                for cls_id in range(num_cls):
+                    cls_mask = self.query_idx == cls_id
+                    cls_probs = seg_logits[cls_mask]
+                    cls_prob = (
+                        self.logit_weight * cls_probs.max(dim=0).values
+                        + (1 - self.logit_weight) * cls_probs.mean(dim=0)
+                    )
+                    class_prob_maps.append(cls_prob)
+                seg_logits = torch.stack(class_prob_maps, dim=0)
 
     
         return seg_logits
