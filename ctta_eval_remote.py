@@ -28,6 +28,7 @@ from ctta.dataset import CorruptedRemoteDataset
 from ctta.metrics import summarize_progress, summarize_results
 from ctta.modules.safs import TemporalSAFSGate
 from ctta.state import AdaptationStateController
+from ctta.visualization import should_save_vis, save_remote_visualization
 from data.cls_to_names_remote import (
     OpenEarthMap_classes,
     potsdam_classes,
@@ -177,8 +178,8 @@ def _evaluate_domain(
 
     domain_results = []
     loss_reports = []
-    for image_name, images, ori_shape, target in tqdm(
-        loader, total=len(loader), desc=f'{set_id}:{corruption}'
+    for sample_idx, (image_name, images, ori_shape, target) in enumerate(
+        tqdm(loader, total=len(loader), desc=f'{set_id}:{corruption}')
     ):
         state.before_sample()
         images = images.to(device, non_blocking=True)
@@ -213,6 +214,26 @@ def _evaluate_domain(
                 mask_pred, _ = model(images, ori_shape, image_name[0], args, test=True)
 
         target = target.to(mask_pred.device)
+
+        if args.save_vis and should_save_vis(sample_idx, args.vis_interval):
+            reliability = getattr(model, 'last_rsap_reliability_map', None)
+            vis_path = save_remote_visualization(
+                dataset=dataset,
+                sample_idx=sample_idx,
+                image_name=image_name[0],
+                pred=mask_pred[0],
+                gt=target[0],
+                reliability=reliability,
+                num_classes=args.num_classes,
+                vis_root=args.vis_dir,
+                set_id=set_id,
+                corruption=corruption,
+                severity=args.corruption_severity,
+                ignore_index=255,
+            )
+            reliability_note = '' if reliability is not None else ' (reliability unavailable)'
+            print(f'[VIS] saved {vis_path}{reliability_note}')
+
         for mask_i, output_i in zip(target, mask_pred):
             domain_results.append(
                 intersect_and_union(
