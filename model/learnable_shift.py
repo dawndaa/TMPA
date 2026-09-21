@@ -134,7 +134,7 @@ class TestTimeShiftTuning(nn.Module):
         if args.module_cat_prompt:
             self.reliability_query_idx_list = list(self.query_idx_list)
             self.reliability_query_features = self.query_features.detach()
-        else:
+        elif args.loss_sdr:
             reliability_words, reliability_idx = get_cls_idx_multi_prom(
                 args.reliability_prompt_path
             )
@@ -153,6 +153,10 @@ class TestTimeShiftTuning(nn.Module):
             self.reliability_query_features = torch.cat(
                 reliability_features, dim=0
             ).detach()
+        else:
+            # No reliability consumer is active in this configuration.
+            self.reliability_query_idx_list = []
+            self.reliability_query_features = None
 
         num_queries = len(self.query_idx)   
         self.alpha = nn.Parameter(torch.full((num_queries, 1), self.alpha_init, device=device, dtype=self.dtype))    
