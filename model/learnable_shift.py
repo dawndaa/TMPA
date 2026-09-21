@@ -126,6 +126,34 @@ class TestTimeShiftTuning(nn.Module):
         self.query_features = torch.cat(query_features, dim=0)
         self.text_embeds = self.query_features
 
+        # v4 separates prediction prompts from the frozen multi-description
+        # reliability bank. When Cat-Prompt is enabled, both are identical so
+        # the Full RSAP+SDR path remains behaviorally unchanged. When disabled,
+        # prediction uses one prompt per class while SDR can still estimate
+        # reliability from the preserved original multi-description prompt file.
+        if args.module_cat_prompt:
+            self.reliability_query_idx_list = list(self.query_idx_list)
+            self.reliability_query_features = self.query_features.detach()
+        else:
+            reliability_words, reliability_idx = get_cls_idx_multi_prom(
+                args.reliability_prompt_path
+            )
+            self.reliability_query_idx_list = [int(idx) for idx in reliability_idx]
+            reliability_features = []
+            with torch.no_grad():
+                for qw in reliability_words:
+                    query = self.tokenizer(
+                        [temp(qw) for temp in openai_imagenet_template]
+                    ).to(device)
+                    feature = self.net.encode_text(query)
+                    feature /= feature.norm(dim=-1, keepdim=True)
+                    feature = feature.mean(dim=0)
+                    feature /= feature.norm()
+                    reliability_features.append(feature.unsqueeze(0))
+            self.reliability_query_features = torch.cat(
+                reliability_features, dim=0
+            ).detach()
+
         num_queries = len(self.query_idx)   
         self.alpha = nn.Parameter(torch.full((num_queries, 1), self.alpha_init, device=device, dtype=self.dtype))    
 
@@ -271,7 +299,14 @@ class TestTimeShiftTuning(nn.Module):
         
         return new_text_features
 
-    def _rsap_consensus_visual_mining(self, image_features_clip, prompt_features, topk=3, gamma=1.0):
+    def _rsap_consensus_visual_mining(
+        self,
+        image_features_clip,
+        prompt_features,
+        prompt_idx_list,
+        topk=3,
+        gamma=1.0,
+    ):
         """Build reliability-weighted visual prototypes from multi-prompt consensus.
 
         Prompt files can contain a different number of descriptions per class
@@ -291,7 +326,7 @@ class TestTimeShiftTuning(nn.Module):
             )
 
         class_to_prompt_indices = [[] for _ in range(self.num_classes)]
-        for prompt_idx, class_idx in enumerate(self.query_idx_list):
+        for prompt_idx, class_idx in enumerate(prompt_idx_list):
             if class_idx < 0 or class_idx >= self.num_classes:
                 raise ValueError(
                     f'Prompt class index {class_idx} is outside [0, {self.num_classes - 1}].'
@@ -301,7 +336,7 @@ class TestTimeShiftTuning(nn.Module):
         prompt_counts = [len(indices) for indices in class_to_prompt_indices]
         if not prompt_counts or min(prompt_counts) < 2:
             raise ValueError(
-                'RSAP-v1 requires at least two prompts for every class; '
+                'Reliability estimation requires at least two prompts for every class; '
                 f'got per-class counts {prompt_counts}.'
             )
 
@@ -424,9 +459,12 @@ class TestTimeShiftTuning(nn.Module):
                     token_reliability,
                 ) = self._rsap_consensus_visual_mining(
                     image_features_clip,
-                    # Shared reliability estimator for both RSAP and standalone SDR.
-                    # Frozen Cat-Prompt semantics avoid a self-reinforcing loop.
-                    self.query_features.to(device),
+                    # The frozen reliability bank is independent from the
+                    # segmentation-prediction prompt bank in v4. For Full
+                    # RSAP+SDR they are identical; for SDR-only the former
+                    # remains multi-description while prediction is single-prompt.
+                    self.reliability_query_features.to(device),
+                    self.reliability_query_idx_list,
                     topk=args.rsap_topk,
                     gamma=args.rsap_gamma,
                 )
