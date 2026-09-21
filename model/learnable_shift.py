@@ -157,7 +157,7 @@ class TestTimeShiftTuning(nn.Module):
         num_queries = len(self.query_idx)   
         self.alpha = nn.Parameter(torch.full((num_queries, 1), self.alpha_init, device=device, dtype=self.dtype))    
 
-        self.last_rsap_reliability_map = None
+        self.last_reliability_map = None
         if self.feature_up:   
             self.feat_dim = self.embed_dim 
             self.upsampler = get_upsampler('jbu_one', self.feat_dim).cuda().half()
@@ -603,7 +603,7 @@ class TestTimeShiftTuning(nn.Module):
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img)).to(device)  
         count_mat = img.new_zeros((img.shape[0], 1, h_img, w_img))
         reliability_assem = None
-        self.last_rsap_reliability_map = None
+        self.last_reliability_map = None
         if args.module_rsap_v1 or args.loss_sdr:
             reliability_assem = torch.zeros(
                 (batch_size, 1, h_img, w_img),
@@ -677,7 +677,7 @@ class TestTimeShiftTuning(nn.Module):
                 align_corners=False,
             ).clamp(0.0, 1.0)
             # Strict CTTA uses batch size 1; SDR consumes a detached [H, W] map.
-            self.last_rsap_reliability_map = full_reliability[0, 0].detach()
+            self.last_reliability_map = full_reliability[0, 0].detach()
 
         if args.loss_prompt == 'True':
             pred_mask, pred_logit, all_seg_logits = self.postprocess_result(logits.to(logit_patch.device), image_name,args)
