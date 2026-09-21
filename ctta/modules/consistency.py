@@ -92,7 +92,7 @@ def reliability_guided_source_consistency(
         reliability = reliability.squeeze(0)
     if reliability.shape != per_pixel_gsc.shape:
         raise ValueError(
-            'RSAP reliability map must match the per-pixel GSC map: '
+            'Reliability map must match the per-pixel GSC map: '
             f'got reliability {tuple(reliability.shape)} vs GSC {tuple(per_pixel_gsc.shape)}.'
         )
 
