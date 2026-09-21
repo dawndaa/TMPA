@@ -132,8 +132,9 @@ def parse_args():
         help=(
             'Enable reliability-guided semantic drift regulation (SDR): retain the '
             'original symmetric-KL source consistency, but weight pixels using a '
-            'detached multi-prompt reliability map with a protected minimum anchor weight. '
-            'This can be ablated independently from RSAP calibration.'
+            'detached multi-description reliability map with a protected minimum anchor '
+            'weight. When Cat-Prompt/RSAP prediction is disabled, SDR uses the original '
+            'multi-description prompt file only as a frozen auxiliary reliability bank.'
         ),
     )
     parser.add_argument(
@@ -335,9 +336,14 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Cat-Prompt switch: expose the original multi-description prompt file as a
-    # one-category-name-per-class file without modifying checked-in configs.
+    # Prompt routing (v4):
+    # - cat_prompt_source_path always preserves the original multi-description bank.
+    # - name_path controls the actual segmentation-prediction prompts.
+    # When Cat-Prompt/RSAP prediction is disabled, prediction falls back to one
+    # category-name prompt per class, while SDR may still read the preserved
+    # multi-description bank only for detached reliability estimation.
     args.cat_prompt_source_path = args.name_path
+    args.reliability_prompt_path = args.cat_prompt_source_path
     if not args.module_cat_prompt:
         args.name_path = _build_single_prompt_file(args.name_path)
 
@@ -358,10 +364,6 @@ def parse_args():
             raise ValueError('--rsap_gamma must be non-negative.')
 
     if args.loss_sdr:
-        if not args.module_cat_prompt:
-            raise ValueError(
-                '--loss_sdr requires Cat-Prompt / multiple prompts per class to estimate reliability.'
-            )
         if args.loss_src_cons:
             raise ValueError(
                 '--loss_sdr already contains GSC; do not combine it with --loss_src_cons '
