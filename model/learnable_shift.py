@@ -432,7 +432,7 @@ class TestTimeShiftTuning(nn.Module):
         self.text_features = self.text_features.to(self.device)    
 
         self.output_cls_token = True
-        rsap_reliability_map = None
+        reliability_map = None
 
         image_features = self.net.encode_image(img, self.ignore_residual, self.output_cls_token)  
 
@@ -480,11 +480,11 @@ class TestTimeShiftTuning(nn.Module):
                         'Reliability token count does not match the visual grid: '
                         f'{token_reliability.numel()} vs {feature_w}x{feature_h}.'
                     )
-                rsap_reliability_map = token_reliability.view(
+                reliability_map = token_reliability.view(
                     1, 1, feature_w, feature_h
                 )
-                rsap_reliability_map = F.interpolate(
-                    rsap_reliability_map.float(),
+                reliability_map = F.interpolate(
+                    reliability_map.float(),
                     size=img.shape[-2:],
                     mode='bilinear',
                     align_corners=False,
@@ -579,7 +579,7 @@ class TestTimeShiftTuning(nn.Module):
         return (
             logits,
             image_features.permute(0, 2, 1).contiguous().view(-1, self.feat_dim, image_w, image_h),
-            rsap_reliability_map,
+            reliability_map,
         )
     
     
