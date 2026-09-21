@@ -111,22 +111,27 @@ def _build_model_and_optimizer(args, classnames, device):
 
     trainable_param = []
     if args.text_shift:
+        # text_shifter is the actual text-offset parameterization used by the
+        # current forward path. The legacy text_shifter_visual object is kept
+        # for checkpoint/reset compatibility but is not optimized in v4.
         model.text_shifter.requires_grad_(True)
         trainable_param.extend(model.text_shifter.parameters())
-        if hasattr(model, 'text_shifter_visual'):
-            model.text_shifter_visual.requires_grad_(True)
-            trainable_param.extend(model.text_shifter_visual.parameters())
 
-    model.alpha.requires_grad_(True)
+    alpha_is_active = bool(
+        args.module_rsap_v1
+        or (args.module_visual_guidance and args.text_adjust == 'True')
+    )
+    model.alpha.requires_grad_(alpha_is_active)
 
     optimizer = None
     if args.tta_steps > 0:
-        other_params = [p for p in trainable_param if p is not model.alpha]
         param_groups = []
-        if other_params:
-            param_groups.append({'params': other_params, 'lr': args.lr})
-        param_groups.append({'params': [model.alpha], 'lr': args.lr})
-        optimizer = torch.optim.AdamW(param_groups)
+        if trainable_param:
+            param_groups.append({'params': trainable_param, 'lr': args.lr})
+        if alpha_is_active:
+            param_groups.append({'params': [model.alpha], 'lr': args.lr})
+        if param_groups:
+            optimizer = torch.optim.AdamW(param_groups)
 
     source_model = build_source_model(model, args)
     return model, optimizer, source_model
@@ -231,6 +236,23 @@ def _tmpa_module_config(args):
             'enabled': bool(args.module_cat_prompt),
             'mode': 'multi_description' if args.module_cat_prompt else 'single_category_name',
             'source_prompt_file': getattr(args, 'cat_prompt_source_path', args.name_path),
+            'definition': (
+                'Controls only the segmentation-prediction prompt bank in v4. '
+                'SDR reliability may still use the frozen auxiliary multi-description bank.'
+            ),
+        },
+        'reliability_prompt_bank': {
+            'enabled': bool(args.module_rsap_v1 or args.loss_sdr),
+            'source_prompt_file': getattr(
+                args, 'reliability_prompt_path',
+                getattr(args, 'cat_prompt_source_path', args.name_path)
+            ),
+            'prediction_uses_same_bank': bool(args.module_cat_prompt),
+            'definition': (
+                'Frozen multi-description text bank used only to estimate detached semantic '
+                'reliability. When RSAP is disabled, this bank does not participate in '
+                'segmentation prediction.'
+            ),
         },
         'visual_guidance': {
             'enabled': bool(args.module_visual_guidance and args.text_adjust == 'True'),
@@ -279,8 +301,9 @@ def _stabilization_config(args):
             'min_pixel_weight': args.sdr_min_weight,
             'definition': (
                 'Reliability-guided GSC: preserve symmetric-KL source consistency while '
-                'redistributing pixel weights as w_min + (1-w_min)*(1-r). The weighted '
-                'mean is normalized to keep the loss scale comparable to uniform GSC.'
+                'redistributing pixel weights as w_min + (1-w_min)*(1-r). Reliability is '
+                'read from the frozen multi-description bank and is independent of whether '
+                'that bank is used by the segmentation prediction branch.'
             ),
         },
         'prompt_feature_consistency': {
