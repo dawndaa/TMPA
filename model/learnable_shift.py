@@ -310,6 +310,7 @@ class TestTimeShiftTuning(nn.Module):
         prompt_idx_list,
         topk=3,
         gamma=1.0,
+        use_reliability=True,
     ):
         """Build reliability-weighted visual prototypes from multi-prompt consensus.
 
@@ -323,6 +324,11 @@ class TestTimeShiftTuning(nn.Module):
         Reliability is detached from the optimization graph because it is an
         evidence-selection/gating statistic rather than another target that
         entropy minimization should be able to manipulate directly.
+
+        With use_reliability=False, retain consensus class assignments but
+        replace ranking/weighting with fixed K-token sampling and a uniform
+        mean. Present classes return unit fusion gates; absent classes keep
+        zero gates. Token reliability is a unit placeholder in this mode.
         """
         if image_features_clip.ndim != 3 or image_features_clip.shape[0] != 1:
             raise ValueError(
@@ -371,13 +377,18 @@ class TestTimeShiftTuning(nn.Module):
 
                 prompt_support = torch.stack(per_prompt_support, dim=0)  # [K_c, N]
                 class_consensus.append(prompt_support.mean(dim=0))
-                class_disagreement.append(
-                    prompt_support.var(dim=0, unbiased=False)
-                )
+                if use_reliability:
+                    class_disagreement.append(
+                        prompt_support.var(dim=0, unbiased=False)
+                    )
 
             consensus = torch.stack(class_consensus, dim=-1)      # [N, C]
-            disagreement = torch.stack(class_disagreement, dim=-1)
-            reliability = consensus * torch.exp(-float(gamma) * disagreement)
+            if use_reliability:
+                disagreement = torch.stack(class_disagreement, dim=-1)
+                reliability = consensus * torch.exp(-float(gamma) * disagreement)
+            else:
+                # Unit placeholders carry no confidence/disagreement information.
+                reliability = torch.ones_like(consensus)
 
             predicted_class = consensus.argmax(dim=-1)
             class_visual_prototypes = []
@@ -396,11 +407,23 @@ class TestTimeShiftTuning(nn.Module):
                     reliability_score = reliability.new_zeros(())
                 else:
                     k = min(int(topk), num_candidates)
-                    scores = reliability[:, class_idx].masked_fill(
-                        ~class_mask, torch.finfo(reliability.dtype).min
-                    )
-                    top_values, top_indices = torch.topk(scores, k=k, largest=True)
-                    weights = top_values.clamp_min(1e-8)
+                    if use_reliability:
+                        scores = reliability[:, class_idx].masked_fill(
+                            ~class_mask, torch.finfo(reliability.dtype).min
+                        )
+                        top_values, top_indices = torch.topk(scores, k=k, largest=True)
+                        weights = top_values.clamp_min(1e-8)
+                    else:
+                        # Fixed stratified positions in raster-ordered candidates:
+                        # preserve K without confidence ranking, top-k tie behavior,
+                        # or consuming RNG state in online/reference forwards.
+                        candidates = torch.where(class_mask)[0]
+                        positions = (
+                            (2 * torch.arange(k, device=candidates.device) + 1)
+                            * num_candidates // (2 * k)
+                        )
+                        top_indices = candidates[positions]
+                        weights = reliability.new_ones(k)
                     selected_tokens = visual_tokens[top_indices].float()
                     prototype = (
                         selected_tokens * weights.unsqueeze(-1)
@@ -471,6 +494,7 @@ class TestTimeShiftTuning(nn.Module):
                     self.reliability_query_idx_list,
                     topk=args.rsap_topk,
                     gamma=args.rsap_gamma,
+                    use_reliability=not getattr(args, 'no_reliability', False),
                 )
                 feature_w = img[0].shape[-2] // self.patch_size[0]
                 feature_h = img[0].shape[-1] // self.patch_size[1]

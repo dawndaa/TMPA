@@ -277,6 +277,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        '--no_reliability',
+        action='store_true',
+        help=(
+            'Full w/o reliability ablation (requires RSAP + SDR): keep consensus '
+            'class assignment, sample K tokens at fixed evenly spaced candidate '
+            'positions, average them uniformly, use alpha without reliability '
+            'gating, and replace SDR pixel weighting with uniform symmetric KL.'
+        ),
+    )
+    parser.add_argument(
         '--rsap_gamma',
         type=float,
         default=1.0,
@@ -375,5 +385,8 @@ def parse_args():
             raise ValueError('--rsap_topk must be >= 1.')
         if not 0.0 <= args.sdr_min_weight <= 1.0:
             raise ValueError('--sdr_min_weight must be in [0, 1].')
+
+    if args.no_reliability and not (args.module_rsap_v1 and args.loss_sdr):
+        raise ValueError('--no_reliability requires Full: --module_rsap_v1 --loss_sdr.')
 
     return args

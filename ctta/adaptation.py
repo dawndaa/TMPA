@@ -121,7 +121,13 @@ def test_time_tuning_ctta(
                 )
 
             sdr_loss = base_loss.new_zeros(())
-            if args.loss_sdr:
+            if args.loss_sdr and getattr(args, 'no_reliability', False):
+                # Preserve the same anchor, symmetric KL and lamb_sdr. Calling
+                # uniform GSC directly also handles sdr_min_weight=0 correctly.
+                sdr_loss = source_prediction_consistency(
+                    seg_prob_maps, source_prob_maps
+                )
+            elif args.loss_sdr:
                 reliability_map = getattr(model, 'last_reliability_map', None)
                 if reliability_map is None:
                     raise RuntimeError(

@@ -232,6 +232,15 @@ def _evaluate_domain(
 
 def _tmpa_module_config(args):
     return {
+        'reliability_ablation': {
+            'enabled': bool(getattr(args, 'no_reliability', False)),
+            'variant': 'full_wo_reliability' if getattr(args, 'no_reliability', False) else 'default',
+            'definition': (
+                'Keep consensus class assignment and K; use fixed evenly spaced '
+                'candidate positions, uniform prototype averaging, ungated alpha '
+                '(absent classes keep zero visual contribution), and uniform GSC.'
+            ),
+        },
         'cat_prompt': {
             'enabled': bool(args.module_cat_prompt),
             'mode': 'multi_description' if args.module_cat_prompt else 'single_category_name',
@@ -243,12 +252,20 @@ def _tmpa_module_config(args):
         },
         'reliability_prompt_bank': {
             'enabled': bool(args.module_rsap_v1 or args.loss_sdr),
+            'reliability_estimation_enabled': bool(
+                (args.module_rsap_v1 or args.loss_sdr)
+                and not getattr(args, 'no_reliability', False)
+            ),
+            'role': 'consensus_only' if getattr(args, 'no_reliability', False) else 'reliability',
             'source_prompt_file': getattr(
                 args, 'reliability_prompt_path',
                 getattr(args, 'cat_prompt_source_path', args.name_path)
             ),
             'prediction_uses_same_bank': bool(args.module_cat_prompt),
             'definition': (
+                'Frozen multi-description bank used only for consensus class assignment; '
+                'reliability estimation is disabled.'
+            ) if getattr(args, 'no_reliability', False) else (
                 'Frozen multi-description text bank used only to estimate detached semantic '
                 'reliability. When RSAP is disabled, this bank does not participate in '
                 'segmentation prediction.'
@@ -267,7 +284,11 @@ def _tmpa_module_config(args):
             'enabled': bool(args.module_rsap_v1),
             'topk': args.rsap_topk,
             'gamma': args.rsap_gamma,
+            'reliability_enabled': not getattr(args, 'no_reliability', False),
             'definition': (
+                'Consensus class assignment, fixed K-token sampling, equal-weight prototypes '
+                'and alpha-only fusion; no reliability ranking, weighting or gating.'
+            ) if getattr(args, 'no_reliability', False) else (
                 'Reliability-aware Scene-Adaptive Prompting: frozen Cat-Prompt consensus '
                 'estimates target reliability, mines class visual prototypes, and gates '
                 'text/visual calibration independently of legacy Visual Guidance.'
@@ -299,7 +320,12 @@ def _stabilization_config(args):
             'enabled': bool(args.loss_sdr),
             'weight': args.lamb_sdr,
             'min_pixel_weight': args.sdr_min_weight,
+            'pixel_weighting': 'uniform' if getattr(args, 'no_reliability', False) else 'reliability',
+            'effective_min_pixel_weight': 1.0 if getattr(args, 'no_reliability', False) else args.sdr_min_weight,
             'definition': (
+                'Uniform symmetric-KL source consistency with the same frozen source-state '
+                'reference and lamb_sdr; sdr_min_weight is inactive.'
+            ) if getattr(args, 'no_reliability', False) else (
                 'Reliability-guided GSC: preserve symmetric-KL source consistency while '
                 'redistributing pixel weights as w_min + (1-w_min)*(1-r). Reliability is '
                 'read from the frozen multi-description bank and is independent of whether '
@@ -347,6 +373,8 @@ def _stabilization_config(args):
 
 def _result_tag(args):
     parts = [args.reset_mode, f'sev{args.corruption_severity}']
+    if getattr(args, 'no_reliability', False):
+        parts.append('full-wo-reliability')
     # Keep legacy filenames unchanged for the default full-TMPA configuration.
     if not args.module_cat_prompt:
         parts.append('nocatprompt')

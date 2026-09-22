@@ -4,6 +4,9 @@ This document is the source of truth for branch `feature/rsap-sdr-v4`.
 
 For backward compatibility, the existing CLI switch `--module_rsap_v1` is retained; on this branch it enables the current RSAP implementation described below.
 
+For the optional **Full w/o reliability** experiment, add `--no_reliability`
+to the Full command. See [definition and commands](full_wo_reliability.md).
+
 ## 1. What changed in v4
 
 v4 decouples the **segmentation-prediction prompt bank** from the
