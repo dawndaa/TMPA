@@ -310,6 +310,7 @@ class TestTimeShiftTuning(nn.Module):
         prompt_idx_list,
         topk=3,
         gamma=1.0,
+        use_rsap_reliability=True,
     ):
         """Build reliability-weighted visual prototypes from multi-prompt consensus.
 
@@ -323,6 +324,11 @@ class TestTimeShiftTuning(nn.Module):
         Reliability is detached from the optimization graph because it is an
         evidence-selection/gating statistic rather than another target that
         entropy minimization should be able to manipulate directly.
+
+        use_rsap_reliability=False disables only RSAP ranking, prototype
+        weighting and fusion gating. The returned token reliability remains
+        the original estimate for SDR and visualization. Present classes use
+        unit fusion gates; absent classes retain zero visual contribution.
         """
         if image_features_clip.ndim != 3 or image_features_clip.shape[0] != 1:
             raise ValueError(
@@ -396,11 +402,22 @@ class TestTimeShiftTuning(nn.Module):
                     reliability_score = reliability.new_zeros(())
                 else:
                     k = min(int(topk), num_candidates)
-                    scores = reliability[:, class_idx].masked_fill(
-                        ~class_mask, torch.finfo(reliability.dtype).min
-                    )
-                    top_values, top_indices = torch.topk(scores, k=k, largest=True)
-                    weights = top_values.clamp_min(1e-8)
+                    if use_rsap_reliability:
+                        scores = reliability[:, class_idx].masked_fill(
+                            ~class_mask, torch.finfo(reliability.dtype).min
+                        )
+                        top_values, top_indices = torch.topk(scores, k=k, largest=True)
+                        weights = top_values.clamp_min(1e-8)
+                    else:
+                        # Keep the same K-token budget without confidence ranking
+                        # or consuming RNG state in online/reference forwards.
+                        candidates = torch.where(class_mask)[0]
+                        positions = (
+                            (2 * torch.arange(k, device=candidates.device) + 1)
+                            * num_candidates // (2 * k)
+                        )
+                        top_indices = candidates[positions]
+                        weights = reliability.new_ones(k)
                     selected_tokens = visual_tokens[top_indices].float()
                     prototype = (
                         selected_tokens * weights.unsqueeze(-1)
@@ -471,6 +488,7 @@ class TestTimeShiftTuning(nn.Module):
                     self.reliability_query_idx_list,
                     topk=args.rsap_topk,
                     gamma=args.rsap_gamma,
+                    use_rsap_reliability=not getattr(args, 'no_rsap_reliability', False),
                 )
                 feature_w = img[0].shape[-2] // self.patch_size[0]
                 feature_h = img[0].shape[-1] // self.patch_size[1]
@@ -491,8 +509,9 @@ class TestTimeShiftTuning(nn.Module):
                 ).clamp(0.0, 1.0)
 
             if args.module_rsap_v1:
-                # RSAP calibration path: use the same reliability estimate to
-                # gate how strongly target visual prototypes calibrate prompts.
+                # Default: gate calibration using reliability. The RSAP-only
+                # ablation returns unit gates for present classes and zero for
+                # absent classes, without changing SDR's token reliability.
                 beta = (
                     self.alpha
                     * prompt_reliability.to(

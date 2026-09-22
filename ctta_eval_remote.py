@@ -232,6 +232,10 @@ def _evaluate_domain(
 
 def _tmpa_module_config(args):
     return {
+        'reliability_ablation': {
+            'rsap_disabled': bool(getattr(args, 'no_rsap_reliability', False)),
+            'sdr_disabled': bool(getattr(args, 'no_sdr_reliability', False)),
+        },
         'cat_prompt': {
             'enabled': bool(args.module_cat_prompt),
             'mode': 'multi_description' if args.module_cat_prompt else 'single_category_name',
@@ -267,7 +271,15 @@ def _tmpa_module_config(args):
             'enabled': bool(args.module_rsap_v1),
             'topk': args.rsap_topk,
             'gamma': args.rsap_gamma,
+            'reliability_enabled': bool(
+                args.module_rsap_v1 and not getattr(args, 'no_rsap_reliability', False)
+            ),
+            'no_rsap_reliability': bool(getattr(args, 'no_rsap_reliability', False)),
             'definition': (
+                'RSAP without reliability: consensus class assignment, fixed K-token '
+                'sampling, equal-weight prototypes and alpha-only fusion. '
+                'The original token reliability map is still available to SDR.'
+            ) if getattr(args, 'no_rsap_reliability', False) else (
                 'Reliability-aware Scene-Adaptive Prompting: frozen Cat-Prompt consensus '
                 'estimates target reliability, mines class visual prototypes, and gates '
                 'text/visual calibration independently of legacy Visual Guidance.'
@@ -299,7 +311,17 @@ def _stabilization_config(args):
             'enabled': bool(args.loss_sdr),
             'weight': args.lamb_sdr,
             'min_pixel_weight': args.sdr_min_weight,
+            'no_sdr_reliability': bool(getattr(args, 'no_sdr_reliability', False)),
+            'pixel_weighting': 'uniform' if (
+                getattr(args, 'no_sdr_reliability', False) or args.sdr_min_weight == 1.0
+            ) else 'reliability',
+            'effective_min_pixel_weight': (
+                1.0 if getattr(args, 'no_sdr_reliability', False) else args.sdr_min_weight
+            ),
             'definition': (
+                'Uniform symmetric-KL source consistency with the same frozen source-state '
+                'reference and lamb_sdr; sdr_min_weight is inactive.'
+            ) if getattr(args, 'no_sdr_reliability', False) else (
                 'Reliability-guided GSC: preserve symmetric-KL source consistency while '
                 'redistributing pixel weights as w_min + (1-w_min)*(1-r). Reliability is '
                 'read from the frozen multi-description bank and is independent of whether '
@@ -355,6 +377,12 @@ def _result_tag(args):
     if args.module_rsap_v1:
         gamma = f'{args.rsap_gamma:g}'.replace('.', 'p')
         parts.append(f'rsapv1-k{args.rsap_topk}-g{gamma}')
+    if getattr(args, 'no_rsap_reliability', False) and getattr(args, 'no_sdr_reliability', False):
+        parts.append('full-wo-reliability')
+    elif getattr(args, 'no_rsap_reliability', False):
+        parts.append('wo-rsap-reliability')
+    elif getattr(args, 'no_sdr_reliability', False):
+        parts.append('wo-sdr-reliability')
     if args.loss_src_cons:
         parts.append(f'srccons{args.lamb_src_cons:g}'.replace('.', 'p'))
     if args.loss_sdr:
